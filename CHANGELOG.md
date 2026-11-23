@@ -1,5 +1,13 @@
 # Changelog
 
+## Eject and delete models (23 Nov 2026)
+
+- Eject on the loaded model's row in the model menu unloads it and frees the graphics card.
+- Delete in Settings > Models removes a model's files from the PC. The confirmation lists every file it removes and its
+  size: all parts of a split model, the file behind a Hugging Face cache link, and the vision projector when no other
+  model in the folder uses it. It warns when the files are in another app's folder. The loaded model, a model still
+  downloading, and Ollama models (its store shares files between models) are refused.
+
 ## Pictures in answers (22 Nov 2026)
 
 - A message that asks to see something ("show me the cover of this book", "what does X look like", "a photo of...")

@@ -514,6 +514,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .menu .s { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .menu .sub { grid-column: 2 / -1; color: var(--muted); font-size: 12.5px; margin-top: -2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu .tick { color: var(--accent); }
+.menu .ej { margin-left: 10px; padding: 2px 9px; border: 1px solid var(--line2); border-radius: 7px; color: var(--ink); font-size: 12px; cursor: pointer; }
+.menu .ej:hover { background: var(--line2); }
 .menu .head { color: var(--muted); font-size: 12px; padding: 6px 10px 4px; max-width: 440px; line-height: 1.45; }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 6px; }
 /* the Search button's panel: where answers are looked up, and in what order */
@@ -1328,6 +1330,12 @@ function openMenu(anchor, items, onPick) {
     const b = document.createElement("button"); b.setAttribute("role", "menuitem");
     b.innerHTML = `<span class="tick">${it.on ? "✓" : ""}</span><span class="t"></span><span class="s"></span>` + (it.sub ? '<span class="sub"></span>' : "");
     b.children[1].innerHTML = esc(it.label) + (it.tags || ""); b.children[2].textContent = it.side || ""; if (it.sub) b.children[3].textContent = it.sub;
+    // an action of its own on the row (the loaded model's Eject): a span, since a button cannot hold a button
+    if (it.act) {
+      const x = document.createElement("span"); x.className = "ej"; x.textContent = it.act.label; x.title = it.act.title || "";
+      x.onclick = e => { e.stopPropagation(); closeMenu(); it.act.run(); };
+      b.children[2].appendChild(x);
+    }
     b.onclick = () => { closeMenu(); onPick(it); };
     m.appendChild(b);
   }
@@ -1451,17 +1459,19 @@ function ramShort(m, sys, models) {
   const free = sys.ram.free_mb / 1024 + (cur && cur.id !== m.id ? cur.split.experts / G : 0), need = m.split.experts / G + 2;
   return need > free ? `short of memory: needs about ${Math.round(need)} GB free, ${Math.round(free)} GB is` : "";
 }
+async function eject() { try { await api("/api/unload", {}); toast("Unloading the model"); } catch (e) { toast(e.message); } status(); }
 $("modelbtn").onclick = async () => {
   let j, sys; try { [j, sys] = await Promise.all([api("/api/models"), api("/api/system").catch(() => null)]); } catch (e) { return; }
   const items = [{ head: "Models downloaded on this PC" }].concat(j.models.map(m => {
     const short = m.current && S.status && S.status.status !== "idle" && S.status.status !== "error" ? "" : ramShort(m, sys, j.models);
     return { key: m.id, label: m.label, side: m.gb + " GB", tags: modelTags(m),
-      sub: `${m.repo} · ${m.arch}${m.context ? " · reads " + fmtK(m.context) : ""}` + (short ? " · " + short : ""), on: m.current && S.status.status !== "idle" };
+      sub: `${m.repo} · ${m.arch}${m.context ? " · reads " + fmtK(m.context) : ""}` + (short ? " · " + short : ""), on: m.current && S.status.status !== "idle",
+      act: m.current && S.status && S.status.status === "ready" ? { label: "⏏ Eject", title: "Unload this model: frees the graphics card", run: eject } : null };
   }));
   items.push({ sep: 1 }, { key: "__refresh", label: "Look for new downloads" }, { key: "__unload", label: "Unload the model", sub: "frees the graphics card" }, { key: "__set", label: "Models and downloads…" });
   openMenu($("modelbtn"), items, async it => {
     if (it.key === "__refresh") { await api("/api/models?refresh=1").catch(() => {}); return $("modelbtn").click(); }
-    if (it.key === "__unload") { await api("/api/unload", {}).catch(e => toast(e.message)); toast("Unloading the model"); return status(); }
+    if (it.key === "__unload") return eject();
     if (it.key === "__set") return openSettings("models");
     if (it.on) {
       if (!confirm("Fit the lanes again for " + it.label + "? Use this when other programs have freed (or taken) memory on the graphics card. It takes about half a minute.")) return;
@@ -3735,7 +3745,21 @@ async function renderModels() {
     } else {
       const a = document.createElement("button"); a.className = "btn pri"; a.textContent = "Load"; a.disabled = st.status === "loading";
       a.onclick = async () => { try { await api("/api/model", { id: m.id }); toast("Loading " + m.label); status(); setTimeout(renderModels, 800); } catch (e) { toast(e.message); } };
-      ctl.append(a);
+      // Delete: what goes is asked of the app first (every part, the vision file, the real file behind a cache link) and
+      // shown in the confirmation; the files are deleted for good, so the space is free at once
+      const del = document.createElement("button"); del.className = "btn danger"; del.textContent = "Delete";
+      if (m.source === "Ollama") { del.disabled = true; del.title = "Ollama keeps this model: remove it in Ollama (ollama rm)"; }
+      del.onclick = async () => {
+        let info; try { info = await api("/api/models/delete", { id: m.id, dry: true }); } catch (e) { toast(e.message); return; }
+        const n = info.files.length, list = info.files.map(f => "   " + f.name + "  (" + bytesTxt(f.bytes) + ")").join("\n");
+        const other = info.app ? `\n\nThese files are in ${info.app}'s folder: ${info.app} will no longer have this model either.` : "";
+        if (!confirm(`Delete ${m.label} from this PC?\n\n${n} file${n > 1 ? "s" : ""}, ${bytesTxt(info.bytes)} in all:\n${list}\n\n`
+          + `They are deleted for good (not moved to the Recycle Bin), so the space is free at once. This cannot be undone; the model can be downloaded again.${other}`)) return;
+        del.disabled = a.disabled = true; del.textContent = "Deleting…";
+        try { const r = await api("/api/models/delete", { id: m.id }); toast(`Deleted ${m.label}: ${bytesTxt(r.bytes)} freed`); } catch (e) { toast(e.message); }
+        renderModels();
+      };
+      ctl.append(a, del);
     }
     $("mlist").appendChild(d);
   }

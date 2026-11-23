@@ -380,6 +380,35 @@ def find_model(key):
     return None
 
 
+SPLIT_PART = re.compile(r"-\d{5}-of-\d{5}\.gguf$", re.I)
+OTHER_APPS = ("LM Studio", "Jan", "GPT4All", "Unsloth Studio", "Ollama")     # folders other programs keep their models in
+
+
+def model_files(m):
+    """What deleting a model removes: [(path, bytes)]. Every part of a split model; the file a Hugging Face cache link
+    points to (the link alone frees nothing); the vision projector next to it when no other model in that folder uses it."""
+    folder, fn = os.path.dirname(m["path"]), os.path.basename(m["path"])
+    if m.get("parts", 1) > 1 and SPLIT_PART.search(fn):
+        stem = SPLIT_PART.sub("", fn)
+        names = sorted(x for x in os.listdir(folder) if x.lower().endswith(".gguf") and SPLIT_PART.sub("", x) == stem)
+    else:
+        names = [fn]
+    paths = [os.path.join(folder, x) for x in names]
+    mm = m.get("mmproj")
+    if mm and os.path.isfile(mm) and os.path.normcase(os.path.dirname(mm)) == os.path.normcase(folder) and not any(
+            o["id"] != m["id"] and os.path.normcase(os.path.dirname(o["path"])) == os.path.normcase(folder) for o in (STATE["models"] or [])):
+        paths.append(mm)
+    out, seen = [], set()
+    for p in paths:
+        for q in ([p, os.path.realpath(p)] if os.path.islink(p) else [p]):
+            k = os.path.normcase(os.path.abspath(q))
+            if k in seen or not os.path.lexists(q):
+                continue
+            seen.add(k)
+            out.append((q, os.lstat(q).st_size))
+    return out
+
+
 def label(m):
     """a model's name as shown: its file without ".gguf", and without a split file's part number ("-00001-of-00002")"""
     return re.sub(r"-\d{5}-of-\d{5}$", "", re.sub(r"\.gguf$", "", m["file"])) if m else ""
@@ -2703,6 +2732,39 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"id": save_image(b.get("data"))})
             except Exception as e:
                 return self.send_json({"error": str(e)[:200]}, 400)
+        if p == "/api/models/delete":
+            # a model's files deleted from this PC (Settings > Models). {"id", "dry": true} only says what would go.
+            # Not the model in use (it is unloaded first), not one Ollama keeps (its store shares files between models)
+            mid = str(b.get("id") or "")
+            m = next((x for x in (STATE["models"] or model_list()) if x["id"] == mid), None)
+            if not m:
+                return self.send_json({"error": "no such model"}, 404)
+            if m.get("source") == "Ollama":
+                return self.send_json({"error": "Ollama keeps this model and shares its files between models: remove it in Ollama "
+                                                "(ollama rm " + re.sub(r"^ollama/", "", m["repo"]) + ")"}, 400)
+            cur = STATE["model"]
+            if cur and cur["id"] == m["id"] and STATE["status"] not in ("idle", "error"):
+                return self.send_json({"error": "This model is in use: unload it first (or load another one)."}, 409)
+            files = model_files(m)
+            busy = {os.path.normcase(j["path"]) for j in downloads.status() if j.get("state") in ("starting", "downloading")}
+            if any(os.path.normcase(f) in busy for f, _ in files):
+                return self.send_json({"error": "This model is still being downloaded: cancel the download first."}, 409)
+            info = {"files": [{"name": os.path.basename(f), "path": f, "bytes": n} for f, n in files], "bytes": sum(n for _, n in files),
+                    "app": m.get("source") if m.get("source") in OTHER_APPS else ""}
+            if b.get("dry"):
+                return self.send_json(info)
+            freed, failed = 0, []
+            for f, n in files:
+                try:
+                    os.remove(f)
+                    freed += n
+                except OSError as e:
+                    failed.append(os.path.basename(f) + ": " + (e.strerror or str(e)))
+            print(time.strftime("%H:%M:%S"), "model deleted:", m["id"], f"{freed / 2**30:.1f} GB", "; ".join(failed), flush=True)
+            model_list(refresh=True)
+            if failed:
+                return self.send_json({"error": "Some files could not be deleted: " + "; ".join(failed)[:300], "bytes": freed}, 500)
+            return self.send_json({"ok": True, "bytes": freed})
         if p == "/api/models/folders":
             # a folder of the user's own where models are looked for ({"add": path} or {"remove": path}); looked through at once
             cur = list((settings.load().get("models") or {}).get("folders") or [])
