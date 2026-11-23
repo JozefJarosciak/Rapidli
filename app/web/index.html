@@ -1466,7 +1466,13 @@ function ramShort(m, sys, models) {
   const free = sys.ram.free_mb / 1024 + (cur && cur.id !== m.id ? cur.split.experts / G : 0), need = m.split.experts / G + 2;
   return need > free ? `short of memory: needs about ${Math.round(need)} GB free, ${Math.round(free)} GB is` : "";
 }
-async function eject() { try { await api("/api/unload", {}); toast("Unloading the model"); } catch (e) { toast(e.message); } status(); }
+// unloading stops the engine in the background (a few seconds): the status and the model list are read again once the
+// model is no longer loaded, so Settings > Models shows it with Load and Delete like any other
+async function eject() {
+  try { await api("/api/unload", {}); toast("Unloading the model"); } catch (e) { toast(e.message); return status(); }
+  for (let i = 0; i < 60; i++) { await status(); if (!S.status || S.status.status !== "ready") break; await new Promise(r => setTimeout(r, 500)); }
+  if ($("mlist")) renderModels();
+}
 $("modelbtn").onclick = async () => {
   let j, sys; try { [j, sys] = await Promise.all([api("/api/models"), api("/api/system").catch(() => null)]); } catch (e) { return; }
   const items = [{ head: "Models downloaded on this PC" }].concat(j.models.map(m => {
@@ -3732,9 +3738,9 @@ async function renderModels() {
   body.innerHTML = head("Models", "The chat models already on this computer. Rapidli looks for GGUF files each time it starts: in the Hugging Face cache (where Unsloth Studio and many other apps download), in the folders of LM Studio, Ollama, Jan, GPT4All and llama.cpp, in its own models folder, and in any folder you add below.") + '<div class="row" style="margin:0 0 14px"><button class="btn" id="m-refresh">Look for new downloads</button><button class="btn" id="m-unload">Unload the model</button><button class="btn" id="m-dl">Download a model…</button></div><div class="mlist" id="mlist"><p class="note">Reading…</p></div>';
   $("setclose").onclick = closeSettings;
   $("m-refresh").onclick = async () => { $("mlist").innerHTML = '<p class="note">Looking…</p>'; await api("/api/models?refresh=1").catch(() => {}); renderModels(); };
-  $("m-unload").onclick = async () => { try { await api("/api/unload", {}); toast("Unloading the model"); setTimeout(renderModels, 1500); } catch (e) { toast(e.message); } };
+  $("m-unload").onclick = eject;
   $("m-dl").onclick = () => { SET.tab = "downloads"; openSettings("downloads"); };
-  let j, sys; try { [j, sys] = await Promise.all([api("/api/models"), api("/api/system").catch(() => null)]); } catch (e) { $("mlist").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  let j, sys; try { [j, sys] = await Promise.all([api("/api/models"), api("/api/system").catch(() => null), status()]); } catch (e) { $("mlist").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
   const card = S.sys && S.sys.gpu ? S.sys.gpu.total_mb / 1024 : 24;
   const st = S.status || {};
   $("mlist").innerHTML = "";
@@ -3747,7 +3753,7 @@ async function renderModels() {
     if (loading) ctl.innerHTML = '<span class="note" style="margin:0">loading…</span>';
     else if (loaded) {
       const a = document.createElement("button"); a.className = "btn"; a.textContent = "Fit again"; a.onclick = async () => { await api("/api/model", { id: m.id, refit: true }).catch(e => toast(e.message)); toast("Fitting the lanes again"); status(); setTimeout(renderModels, 800); };
-      const b = document.createElement("button"); b.className = "btn danger"; b.textContent = "Unload"; b.onclick = async () => { await api("/api/unload", {}).catch(e => toast(e.message)); setTimeout(renderModels, 1500); };
+      const b = document.createElement("button"); b.className = "btn danger"; b.textContent = "Unload"; b.onclick = () => { a.disabled = b.disabled = true; b.textContent = "Unloading…"; eject(); };
       ctl.append(a, b);
     } else {
       const a = document.createElement("button"); a.className = "btn pri"; a.textContent = "Load"; a.disabled = st.status === "loading";

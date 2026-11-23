@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import base64, hashlib, hmac, random, secrets, urllib.parse
 import eng, fit, models, sizing, settings, search, system, downloads, codecheck, codelanes, smoke, pagelanes
-import kiwix, lint, plat, signal, searchlog
+import kiwix, lint, plat, signal, searchlog, socket
 import fan as fanmod
 from fan import Fan, Stopped
 
@@ -349,7 +349,31 @@ def engine_outside():
     return STATE.get("model") is None and STATE.get("status") != "loading"
 
 
+_UP = {"at": 0.0, "up": False}
+
+
+def engine_up():
+    """Whether something answers on the engine's port. With a model loaded or loading, yes without asking. Without one,
+    the port is tried (0.3 s at most) and the answer kept 2 s: a connection to a closed port takes 1-2 s to fail on
+    Windows, and the page asks for the lanes several times a second, so after an unload its requests piled up behind
+    one another, filled the browser's six connections to the app and held every other view (23 Nov)."""
+    if STATE.get("status") in ("ready", "loading"):
+        return True
+    now = time.monotonic()
+    if now - _UP["at"] < 2:
+        return _UP["up"]
+    try:
+        socket.create_connection(("127.0.0.1", STATE["engine_port"]), timeout=0.3).close()
+        up = True
+    except OSError:
+        up = False
+    _UP.update(at=time.monotonic(), up=up)
+    return up
+
+
 def engine_stats():
+    if not engine_up():
+        return None
     try:
         return json.loads(urllib.request.urlopen(f"http://127.0.0.1:{STATE['engine_port']}/stats", timeout=2).read())
     except Exception:
@@ -2636,6 +2660,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if engine_outside():
                     raise RuntimeError("an engine started outside Rapidli")
+                if not engine_up():
+                    raise RuntimeError("no engine")
                 pf = re.search(r"peak_from=(-?[\d.]+)", self.path)        # (the engine's best second since then: an answer's live peak)
                 b = urllib.request.urlopen(f"http://127.0.0.1:{STATE['engine_port']}/lanes?since={since.group(1) if since else -1}"
                                            + (f"&peak_from={pf.group(1)}" if pf else ""), timeout=1).read()
