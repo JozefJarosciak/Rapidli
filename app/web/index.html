@@ -651,12 +651,19 @@ input[type=range] { accent-color: var(--accent); width: 180px; }
 .seg button { padding: 5px 11px; border-radius: 7px; font-size: 13.5px; color: var(--soft); }
 .seg button.on { background: var(--raise); color: var(--ink); box-shadow: inset 0 0 0 1px var(--accent); }
 .mlist { display: flex; flex-direction: column; gap: 10px; }
-.mcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; align-items: center; }
+/* a model: everything said about it in one block on the left, its buttons on the right (the extra lines, the place
+   and a memory warning, had been laid into the buttons' column and squeezed to a few words a line) */
+.mcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: center; }
 .mcard.cur { border-color: rgba(var(--accent-rgb), .6); }
-.mcard .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mcard .meta { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mcard .mplace { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
-.mcard .ctl { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 6px; }
+.mcard .minfo { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mcard .nm { font-weight: 600; overflow-wrap: anywhere; line-height: 1.35; }
+.mcard .meta { color: var(--muted); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.mcard .mplace { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.mcard .mplace .tag { margin-left: 0; }
+.mcard .mplace .note { flex-basis: 100%; margin: 0 !important; line-height: 1.45; }
+.mcard .mwarn { color: var(--warn); font-size: 12px; line-height: 1.45; padding: 5px 9px; border-left: 2px solid var(--warn); background: rgba(255, 180, 60, .07); border-radius: 0 6px 6px 0; }
+.mcard .ctl { display: flex; gap: 6px; align-self: start; }
+@media (max-width: 640px) { .mcard { grid-template-columns: minmax(0, 1fr); } }
 .hubbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
 .hubbar .inp { flex: 1 1 200px; min-width: 0; } .hubbar select.inp { flex: 0 1 170px; }
 .hub { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 14px; align-items: start; }
@@ -3734,7 +3741,7 @@ async function renderModels() {
   for (const m of j.models) {
     const d = document.createElement("div"); d.className = "mcard" + (m.current && st.status !== "idle" ? " cur" : "");
     const fits = m.gb < card - 1.5;
-    d.innerHTML = `<div class="nm">${esc(m.label)}${modelTags(m)}</div><div class="meta">${m.source ? esc(m.source) + " · " : ""}${esc(m.repo)} · ${m.gb} GB · ${esc(m.arch || "")}${m.layers ? " · " + m.layers + " layers" : ""}${m.context ? " · reads up to " + fmtK(m.context) : ""}${fits ? "" : m.split ? "" : " · larger than the card"}</div>${!fits && m.split ? `<div class="mplace">${placeOf(m.gb, m.split).html}</div>` : ""}${(() => { const sh = m.current && st.status !== "idle" && st.status !== "error" ? "" : ramShort(m, sys, j.models); return sh ? `<div class="note" style="margin:3px 0 0;font-size:11.5px;color:var(--warn)">Now ${esc(sh)}: it would load, but run slowly until other programs leave more room.</div>` : ""; })()}<div class="ctl"></div>`;
+    d.innerHTML = `<div class="minfo"><div class="nm" title="${esc(m.path || m.label)}">${esc(m.label)}${modelTags(m)}</div><div class="meta">${m.source ? esc(m.source) + " · " : ""}${esc(m.repo)} · ${m.gb} GB · ${esc(m.arch || "")}${m.layers ? " · " + m.layers + " layers" : ""}${m.context ? " · reads up to " + fmtK(m.context) : ""}${fits ? "" : m.split ? "" : " · larger than the card"}</div>${!fits && m.split ? `<div class="mplace">${placeOf(m.gb, m.split).html}</div>` : ""}${(() => { const sh = m.current && st.status !== "idle" && st.status !== "error" ? "" : ramShort(m, sys, j.models); return sh ? `<div class="mwarn">Now ${esc(sh)}: it would load, but run slowly until other programs leave more room.</div>` : ""; })()}</div><div class="ctl"></div>`;
     const ctl = d.querySelector(".ctl");
     const loaded = m.current && st.status === "ready", loading = m.current && st.status === "loading";
     if (loading) ctl.innerHTML = '<span class="note" style="margin:0">loading…</span>';
