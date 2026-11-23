@@ -1,5 +1,14 @@
 # Changelog
 
+## Pictures in answers (22 Nov 2026)
+
+- A message that asks to see something ("show me the cover of this book", "what does X look like", "a photo of...")
+  gets pictures from the web with Search on: found through ddgs's image search for the query the web search wrote
+  (so "this book" is the book of the conversation), fetched by the app (only public addresses; the format told by
+  the first bytes; the thumbnail when a site refuses the picture), kept in data/images and shown above the answer
+  with their sites. The model is told what is shown: it had answered "I can't display images" with a description.
+  Without Search, the answer says that Search shows pictures.
+
 ## Ready for a public release (22 Nov 2026)
 
 - The app answers only to its own loopback names (127.0.0.1, localhost, [::1]): a web page renamed to 127.0.0.1 (DNS

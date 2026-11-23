@@ -300,6 +300,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .caret::after { content: "▍"; color: var(--accent); margin-left: 1px; animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .sources { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+/* pictures fetched for a message that asks to see something: a row above the answer, each opening full size */
+.pics { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 12px; }
+.pics figure { margin: 0; width: 180px; }
+.pics a.pic { display: block; height: 220px; border-radius: 10px; overflow: hidden; background: var(--raise); border: 1px solid var(--line); }
+.pics a.pic img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pics a.pic:hover { border-color: var(--accent); }
+.pics figcaption { margin-top: 4px; font-size: 12px; color: var(--muted); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pics figcaption a { color: var(--muted); }
+@media (max-width: 640px) { .pics figure { width: calc(50% - 5px); } .pics a.pic { height: 180px; } }
 .srcfoot { margin: 6px 0 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13.5px; max-width: 74ch; }
 .srcfoot h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
 .srcfoot ol { margin: 0; padding-left: 26px; } .srcfoot li { margin: 3px 0; }
@@ -1062,6 +1071,13 @@ function cite(html, sources, ctx) {
   })).join("");
 }
 function host(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return u; } }
+// the pictures of an answer: kept in data/images (the page loads them from the app, never from other sites)
+function picsHTML(list) {
+  if (!list || !list.length) return "";
+  const href = u => /^https?:\/\//i.test(u || "") ? u : "#";
+  return `<div class="pics">` + list.map(p => `<figure><a class="pic" href="/api/images/${esc(p.id)}" target="_blank" rel="noopener"><img src="/api/images/${esc(p.id)}" alt="${esc(p.title || "picture")}" loading="lazy"></a>`
+    + `<figcaption title="${esc(p.title || "")}">${p.page ? `<a href="${esc(href(p.page))}" target="_blank" rel="noopener noreferrer">${esc(p.source || p.title || "source")}</a>` : esc(p.source || "")}${p.title ? " · " + esc(p.title) : ""}</figcaption></figure>`).join("") + `</div>`;
+}
 function sourcesHTML(list) {
   list = list || [];
   const chips = list.map((s, i) => `<a class="src" href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.title)}${s.query ? " · found by searching " + esc((s.where === "offline" ? "offline Wikipedia" : s.engine || "the web") + " for: " + s.query) : ""}"><b>${i + 1}</b><span>${esc(String(s.url).startsWith("/kiwix/") ? "offline: " + s.title.replace(/ - Wikipedia \(offline\)$/, "") : host(s.url))}</span></a>`).join("");
@@ -2388,6 +2404,7 @@ function assistantEl(m, idx) {
   const lm = S.looms[S.chat + ":" + idx];
   d.innerHTML = (secs ? `<button class="worked" aria-expanded="false">Worked for ${secs} ${ICON.chev}</button><div class="details" hidden>${detailsHTML(st)}</div>` : "")
     + (m.search && m.search.length ? `<div class="sources">${sourcesHTML(m.search)}</div>` : "")
+    + picsHTML(m.pictures)
     + (m.thinking ? `<details class="thought"><summary>Thought${st.think_s ? " for " + Math.round(st.think_s) + " s" : ""}${st.think_tokens ? " · " + nf(st.think_tokens) + " tokens" : ""}${st.think ? " · " + esc((THINKS[st.think] || [st.think])[0]) : ""}</summary><div class="tt">${esc(m.thinking)}</div></details>` : "")
     + `<div class="content">${cite(md(m.content), m.search, (S.msgs[idx - 1] || {}).search_context)}</div>${sourcesFoot(m)}${pageCard(m.content)}<div class="actions">`
     + (vs.length > 1 ? `<span class="vers"><button data-a="prev" aria-label="Previous version">${ICON.left}</button>${vi + 1}/${vs.length}<button data-a="next" aria-label="Next version">${ICON.right}</button></span>` : "")
@@ -2647,10 +2664,14 @@ function onEvent(L, e) {
   if (L.thought && L.thought.open && (e.type === "text" || e.type === "plan" || e.type === "outline")) {   // the answer begins: the thoughts close
     L.thought.open = false; L.thought.firstChild.textContent = `Thought for ${((performance.now() - L.thinkT0) / 1000).toFixed(0)} s`;
   }
+  if (e.type === "pictures") {             // shown at once, above the answer that is still being written
+    const at = L.loom.querySelector(".lm-src"); if (at && !L.loom.querySelector(".pics")) at.insertAdjacentHTML("afterend", picsHTML(e.data));
+    return;
+  }
   if (e.type === "search") {
     const f = L.loom.querySelector(".lm-foot");
     if (e.phase === "searching") f.innerHTML = e.query === "offline Wikipedia" ? `<span>looking it up in <b>offline Wikipedia</b>…</span>`
-      : /^the pages? you linked$/.test(e.query) ? `<span>reading <b>${esc(e.query)}</b>…</span>` : `<span>searching the web for <b>${esc(e.query.slice(0, 80))}</b></span>`;
+      : /^the pages? you linked$/.test(e.query) ? `<span>reading <b>${esc(e.query)}</b>…</span>` : /^pictures of /.test(e.query) ? `<span>finding <b>${esc(e.query.slice(0, 90))}</b>…</span>` : `<span>searching the web for <b>${esc(e.query.slice(0, 80))}</b></span>`;
     else if (e.phase === "kiwix") f.innerHTML = e.data.answers ? `<span>found <b>${e.data.found}</b> article${e.data.found === 1 ? "" : "s"} in offline Wikipedia in <b>${e.data.seconds}</b> s</span>`
       : `<span>offline Wikipedia ${e.data.found ? "does not answer it" : "has nothing on it"}${e.data.web ? ": searching the web" : ""}</span>`;
     else if (e.phase === "results") { L.sources = e.data || []; L.loom.querySelector(".lm-src").innerHTML = sourcesHTML(L.sources); f.innerHTML = `<span><b>${L.sources.length}</b> results, reading the best pages…</span>`; }

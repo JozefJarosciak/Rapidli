@@ -2061,6 +2061,54 @@ def save_image(data_url):
     return iid
 
 
+def store_image(raw, kind):
+    """Stores the bytes of a picture (kind: png, jpg, webp, gif, bmp) in data/images. -> its id (as save_image)"""
+    iid = hashlib.sha1(raw).hexdigest()[:20] + "." + kind
+    os.makedirs(IMAGES, exist_ok=True)
+    p = os.path.join(IMAGES, iid)
+    if not os.path.exists(p):
+        with open(p, "wb") as f:
+            f.write(raw)
+    return iid
+
+
+# a message that asks to see something: "show me the cover of this book", "what does a quokka look like", "a photo of
+# the Eiffel Tower", "can you find a picture of..." (not "describe this image", which is about an attached one)
+PICTURE_ASK = re.compile(
+    r"\b(?:show|find|get|give|display|fetch|search(?:\s+for)?|look\s+up|pull\s+up|see)\b(?:\s+\w+){0,6}?\s+"
+    r"(?:a\s+|an\s+|the\s+|some\s+)?(?:pictures?|photos?|photographs?|images?|pics?|covers?|logos?|posters?|portraits?|"
+    r"screenshots?|artwork|book\s+covers?|album\s+covers?|maps?|diagrams?\s+of)\b"
+    r"|\bwhat\s+(?:does|do|did)\s+.{1,80}?\s+look\s+like\b|\bhow\s+(?:does|do)\s+.{1,80}?\s+look\b"
+    r"|^\s*(?:a\s+|an\s+)?(?:pictures?|photos?|images?)\s+of\b", re.I)
+
+
+def picture_request(text):
+    t = str(text or "")
+    return bool(PICTURE_ASK.search(t)) and not re.search(r"\b(?:this|the|my|attached|above)\s+(?:image|picture|photo)\b(?!s?\s+of)", t, re.I)
+
+
+def find_pictures(query, most=4):
+    """Pictures for a query from the web, fetched and kept in data/images: [{"id", "title", "page", "source"}]. The
+    picture itself first, its thumbnail when the site refuses it (many refuse other sites' pages)."""
+    found = search.images(query, 12)
+
+    def one(r):
+        got = search.fetch_image(r["image"]) or (search.fetch_image(r["thumbnail"]) if r.get("thumbnail") else None)
+        return (r, got) if got else None
+    out, seen = [], set()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+        for x in ex.map(one, found[:10]):
+            if not x or len(out) >= most:
+                continue
+            r, (raw, kind) = x
+            iid = store_image(raw, kind)
+            if iid in seen:
+                continue
+            seen.add(iid)
+            out.append({"id": iid, "title": r["title"], "page": r["page"], "source": r["source"]})
+    return out
+
+
 def load_image(iid):
     if not re.fullmatch(r"[0-9a-f]{20}\.(png|jpg|webp|gif|bmp)", str(iid)):
         return None
@@ -3333,6 +3381,7 @@ class Handler(BaseHTTPRequestHandler):
             fn = self.wait_turn(ticket)
             # web search: the results and the best pages go in front of the question
             question, sources = text, []
+            pictures, web_queries = [], []   # pictures found for a message that asks to see something; the web queries
             searched = []                 # every search term the research used, offline and online (the search log)
             # pages the user linked in the message are read, search or no search (19 Nov: a question that gave the
             # Bradlo PDF's address was answered "the PDF is not in my database", from memory, with invented details)
@@ -3497,6 +3546,7 @@ class Handler(BaseHTTPRequestHandler):
                     # makes an engine stop answering, and engines refused one search in three late in a morning of
                     # tests, 21 Nov. One in the subject's own language stays: it found the Slovak sources)
                     squeries = squeries[:1]
+                web_queries[:] = squeries
                 self.sse({"type": "search", "phase": "searching", "query": " | ".join(squeries)[:200]})
                 try:
                     block, sources = search.context(squeries[0], n=int(cfg["search"]["results"]), pages=int(cfg["search"]["pages"]),
@@ -3524,6 +3574,30 @@ class Handler(BaseHTTPRequestHandler):
             elif use_search:
                 if not look_web() and kfiles:
                     look_wiki(check=False)
+            # pictures: a message that asks to see something gets them from the web, shown above the answer. The model
+            # cannot see them; it is told what they are, so that it does not say it cannot show images (22 Nov: "show me
+            # cover of this book" was answered with a description of the cover)
+            if picture_request(text) and use_search:
+                pq = (web_queries or search_query(fn, msgs[:-1], text))[0]
+                self.sse({"type": "search", "phase": "searching", "query": "pictures of " + pq[:120]})
+                try:
+                    pictures = find_pictures(pq)
+                except Exception as e:
+                    print(time.strftime("%H:%M:%S"), "pictures:", repr(e)[:160], flush=True)
+                    pictures = []
+                if pictures:
+                    self.sse({"type": "pictures", "data": pictures})
+                    question += ("\n\n(Rapidli found these pictures on the web for this message and shows them to the user right "
+                                 "above your answer: " + "; ".join(f"{i + 1}. {p['title'] or 'a picture'} ({p['source']})" for i, p in enumerate(pictures))
+                                 + ". You cannot see them, but the user can: never say that you cannot show or display images. "
+                                 "Say in one or two sentences what is shown, from the titles and the search results, and add "
+                                 "what the user asked about; do not describe details you cannot know.)")
+                else:
+                    question += ("\n\n(The user asked to see a picture; none could be fetched from the web this time. Say so "
+                                 "briefly and point to the sources, without describing a picture you have not seen.)")
+            elif picture_request(text):
+                question += ("\n\n(The user asked to see a picture. Rapidli shows pictures from the web when Search is on (the "
+                             "globe button under the message box): say so in one sentence, then answer what you can.)")
             if searched:
                 try:
                     searchlog.add(searched, chat=cid, question=said_, source=ticket.source)
@@ -4291,12 +4365,14 @@ class Handler(BaseHTTPRequestHandler):
                 a = msgs[-1]
                 if sources:
                     a["search"] = [{k: s[k] for k in ("title", "url", "where", "engine", "query") if s.get(k)} for s in sources]
+                if pictures:
+                    a["pictures"] = pictures
                 if searched:
                     a["searches"] = searched
                 if versions:                  # the new version joins the earlier ones
                     for v in versions:
                         v.setdefault("tail", [])
-                    versions.append({"content": a["content"], "stats": a.get("stats"), "search": a.get("search"), "searches": a.get("searches"), "thinking": a.get("thinking"), "tail": []})
+                    versions.append({"content": a["content"], "stats": a.get("stats"), "search": a.get("search"), "searches": a.get("searches"), "thinking": a.get("thinking"), "pictures": a.get("pictures"), "tail": []})
                     a["versions"], a["version"] = versions, len(versions) - 1
             save_chat(c)
             ctx2 = context_info(msgs)

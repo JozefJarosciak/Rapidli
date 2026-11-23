@@ -175,6 +175,7 @@ and [docs/BUILDING.md](docs/BUILDING.md) lists every patch and what it changes.
 | **Any model you already have** | GGUF chat models from the Hugging Face cache and from LM Studio, Ollama, Jan, GPT4All and llama.cpp folders, found at every start. Vision models work when their projector (`mmproj-*.gguf`) sits next to them: paste or drop images. |
 | **Get models** | Search Hugging Face (trending, most downloaded, liked, recently updated), see a model's figures and files and which quantization fits your card, and download it resumably over several connections. `HF_ENDPOINT` names a mirror. |
 | **Offline Wikipedia** | Kiwix `.zim` files, looked up first for questions about facts: in a few hundredths of a second, with nothing to rate-limit. Several editions and languages at once. |
+| **Pictures** | Ask to see something ("show me the cover of this book", "what does a quokka look like?") with Search on, and Rapidli finds pictures on the web, keeps them with the chat and shows them above the answer; a click opens one full size, and its site is linked under it. |
 | **Web search** | Several search engines through `ddgs`, with DuckDuckGo's page and Wikipedia as fallbacks. The best pages are read and cited as [1], [2]. |
 | **The loom and the engine panel** | While an answer is written, the message shows its phases (Read → Plan → Write ×N → Join) and one bar per lane. The side panel shows live tokens a second with a 90-second chart, busy lanes, what each lane is writing and the card's memory split. |
 | **Conversations** | Kept as JSON in `data/chats`. A long conversation is read once and parked on the card, so a follow-up reads only the new turn. Edit a question, write an answer again, switch versions, put chats in folders. Deleted chats go to a trash for 30 days. |
@@ -183,7 +184,7 @@ and [docs/BUILDING.md](docs/BUILDING.md) lists every patch and what it changes.
 | **API** | `POST /v1/chat/completions` (OpenAI-style, streamed or not), `GET /v1/models`, `POST /api/v1/ask`, `GET /api/v1/status`. Off until switched on; with a key. |
 
 **What leaves your computer:** your conversations never do. Rapidli goes online only for what you ask of it: web
-search sends the search words to the search engines; Get models and Offline Wikipedia ask huggingface.co and
+search sends the search words to the search engines (and, when you ask to see something, fetches the pictures it found); Get models and Offline Wikipedia ask huggingface.co and
 library.kiwix.org for their lists and downloads; diagrams and Run load their libraries (Mermaid, Pyodide, React…)
 from the jsDelivr CDN the first time. The page itself uses system fonts and loads nothing else. Rapidli listens on
 127.0.0.1 only; with the API's "Other computers" on, the API (and nothing else) is reachable from your network, always

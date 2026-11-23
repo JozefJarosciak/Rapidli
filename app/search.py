@@ -75,6 +75,49 @@ def _get(url, data=None, timeout=12, limit=1_500_000):
         return raw.decode("utf-8", "replace"), ctype
 
 
+def images(query, n=12):
+    """Pictures for a query from ddgs's image search: [{"image", "thumbnail", "title", "page", "source"}], best first;
+    [] when ddgs is missing or finds nothing."""
+    try:
+        from ddgs import DDGS
+        rs = DDGS(timeout=8).images(query, max_results=n) or []
+    except Exception:
+        return []
+    out = []
+    for r in rs:
+        u = str(r.get("image") or "")
+        if u.lower().startswith(("http://", "https://")):
+            out.append({"image": u, "thumbnail": str(r.get("thumbnail") or ""), "title": _clean(str(r.get("title") or ""))[:160],
+                        "page": str(r.get("url") or ""),
+                        "source": str(r.get("source") or "") or re.sub(r"^www\.", "", urllib.parse.urlsplit(str(r.get("url") or "")).hostname or "")})
+    return out
+
+
+_MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF87a", "gif"), (b"GIF89a", "gif"), (b"BM", "bmp"))
+
+
+def fetch_image(url, limit=8_000_000, timeout=10):
+    """A picture on the web -> (bytes, "png" | "jpg" | "webp" | "gif" | "bmp"), or None: not a public address, not one
+    of these formats (told by its first bytes, not by what the server says), larger than `limit`, or no answer."""
+    try:
+        url = urllib.parse.quote(url, safe=":/?#[]@!$&'()*+,;=%~")
+        if not url.lower().startswith(("http://", "https://")) or not _public(url):
+            return None
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8"})
+        with _OPENER.open(req, timeout=timeout) as r:
+            raw = r.read(limit + 1)
+    except Exception:
+        return None
+    if len(raw) > limit or len(raw) < 64:
+        return None
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return raw, "webp"
+    for head, kind in _MAGIC:
+        if raw.startswith(head):
+            return raw, kind
+    return None
+
+
 # page markup that is no text: an article's links to its pictures ("networking cables (picture), cellular towers
 # (picture)" in the offline Simple English Wikipedia, and in an answer copied from it, 21 Nov), wiki heading marks
 MARKUP = re.compile(r"\s*\(\s*(?:picture|pictures|image|images|photo|photos|video|map|diagram)\s*\)|^=+\s*|\s*=+$", re.I)
