@@ -11,6 +11,13 @@
 - docs/API.md rewritten for other programs, with examples; Settings › API opens it in the app.
 - No model loaded: the engine's port is tried every 2 s at most, not on every poll (the polls had piled up).
 - Settings › Models: an unloaded model shows Load and Delete once the engine has stopped; the cards' text wraps.
+- "Look for new downloads" says it is looking, then what it found (new models, ones no longer there, how many in all);
+  the new ones are tagged. The model menu stays open for it.
+- Downloads: a download stopped before its first notes were written was later kept whole, nearly all zeros (the .part
+  is made full length first). The notes are now written at once, a full-length .part without notes starts over, and a
+  model is checked against Hugging Face's sha256 (or at least its GGUF start) before it is kept. Unfinished downloads
+  left when Rapidli stopped are listed in Get models with Resume and Delete; the checksum step is shown and can be
+  cancelled. tests/test_fetch.py covers both.
 
 ## Eject and delete models (23 Nov 2026)
 
