@@ -1490,16 +1490,22 @@ async function eject() {
 // reloaded. (It had closed the menu and said nothing: no telling whether it had looked, 23 Nov.)
 async function lookForModels() {
   const t0 = performance.now();
-  let before, after;
-  try { before = (await api("/api/models")).models; after = (await api("/api/models?refresh=1")).models; }
+  let before, after, dl = [];
+  try {
+    before = (await api("/api/models")).models;
+    [after, dl] = await Promise.all([api("/api/models?refresh=1").then(j => j.models), api("/api/downloads").then(j => j.downloads || []).catch(() => [])]);
+  }
   catch (e) { return { msg: "Could not look for new downloads: " + e.message, bad: true }; }
+  // (a model being downloaded is not in the list until it is whole: it is named, with how far it is)
+  const going = dl.filter(x => (x.state === "downloading" || x.state === "starting" || x.state === "checking") && !/mmproj/i.test(x.file));
   const had = new Set(before.map(m => m.id)), now = new Set(after.map(m => m.id));
   const added = after.filter(m => !had.has(m.id)), gone = before.filter(m => !now.has(m.id));
   S.newModels = S.newModels || new Set(); added.forEach(m => S.newModels.add(m.id));
   const names = l => l.slice(0, 3).map(m => m.label).join(", ") + (l.length > 3 ? ` and ${l.length - 3} more` : "");
   const secs = ((performance.now() - t0) / 1000).toFixed(1);
   const msg = (added.length ? `Found ${added.length} new: ${names(added)}` : "Nothing new found")
-    + (gone.length ? `. No longer there: ${names(gone)}` : "") + ` (${after.length} model${after.length === 1 ? "" : "s"} in all, looked in ${secs} s)`;
+    + (gone.length ? `. No longer there: ${names(gone)}` : "") + ` (${after.length} model${after.length === 1 ? "" : "s"} in all, looked in ${secs} s)`
+    + (going.length ? ". Still downloading, listed once whole: " + going.map(x => x.file.replace(/\.gguf$/i, "") + (x.state === "checking" ? " (checking)" : x.total ? ` (${Math.floor(x.done / x.total * 100)}%)` : "")).join(", ") : "");
   return { msg, added, gone, news: added.length > 0 };
 }
 function lookNote(r) {
@@ -1507,7 +1513,11 @@ function lookNote(r) {
 }
 $("modelbtn").onclick = () => openModelMenu();
 async function openModelMenu(look) {
+  // (only the menu asked for last opens: the "looking" one, slower to read its lists while downloads kept the disk
+  // busy, opened after the result and spun on, 23 Nov)
+  const seq = S.menuSeq = (S.menuSeq || 0) + 1;
   let j, sys; try { [j, sys] = await Promise.all([api("/api/models"), api("/api/system").catch(() => null)]); } catch (e) { return; }
+  if (seq !== S.menuSeq) return;
   const items = (look ? [{ head: look.msg, html: lookNote(look) }] : []).concat([{ head: "Models downloaded on this PC" }]).concat(j.models.map(m => {
     const short = m.current && S.status && S.status.status !== "idle" && S.status.status !== "error" ? "" : ramShort(m, sys, j.models);
     return { key: m.id, label: m.label, side: m.gb + " GB", tags: modelTags(m),
@@ -4008,7 +4018,9 @@ async function renderDownloads() {
       const pct = x.total ? x.done / x.total * 100 : 0, live = x.state === "downloading" || x.state === "starting" || x.state === "checking";
       const what = x.state === "downloading" ? `${pct.toFixed(1)}% · ${gb(x.done)} of ${gb(x.total)} GB · ${x.mb_s} MB/s${x.connections > 1 ? ` · ${x.connections} connections` : ""}`
         : x.state === "checking" ? "Downloaded. Checking the file against Hugging Face's checksum (a minute or two for a big model)…"
-        : x.state === "starting" ? "Starting…" : x.state === "done" ? "done: it is in the model list" : x.state === "error" ? "failed: " + x.error
+        : x.state === "starting" ? "Starting…"
+        : x.state === "done" ? (/mmproj/i.test(x.file) ? "done: the vision projector (not a model of its own): a model of this repository downloaded beside it sees images" : "done: it is in the model list")
+        : x.state === "error" ? "failed: " + x.error
         : x.state === "cancelled" ? "cancelled: what was fetched is kept, to go on later (below)" : x.state;
       return `<div class="dl"><div class="top2"><span title="${esc(x.path)}">${esc(x.repo)} / ${esc(x.file)}</span>${live ? `<button class="btn sm danger" data-c="${x.id}">Cancel</button>` : ""}</div><div class="note" style="margin:4px 0 0">${esc(what)}</div>${x.state === "downloading" ? `<div class="prog"><i style="width:${pct.toFixed(1)}%"></i></div>` : ""}</div>`;
     }).join("")
@@ -4024,7 +4036,11 @@ async function renderDownloads() {
       if (!confirm("Delete this unfinished download?\n\n" + b.dataset.drop + ".part\n\nWhat was fetched is deleted for good; the download would start from the beginning.")) return;
       api("/api/downloads/partial/remove", { path: b.dataset.drop }).then(jobs, e => toast(e.message));
     });
-    if (j.downloads.some(x => x.state === "done" && !x.seen)) { j.downloads.forEach(x => x.seen = true); api("/api/models?refresh=1").catch(() => {}); }
+    // a download seen finished: the model folders are looked through once for it (the ids are remembered here: a mark
+    // on the list fetched each second was gone the next second, and a look of 5-8 s was asked for every second)
+    SET.dlSeen = SET.dlSeen || new Set();
+    const fresh = j.downloads.filter(x => x.state === "done" && !SET.dlSeen.has(x.id));
+    if (fresh.length) { fresh.forEach(x => SET.dlSeen.add(x.id)); api("/api/models?refresh=1").catch(() => {}); }
   };
   jobs(); SET.dlTimer = setInterval(jobs, 1000);
   find();

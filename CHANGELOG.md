@@ -18,6 +18,10 @@
   model is checked against Hugging Face's sha256 (or at least its GGUF start) before it is kept. Unfinished downloads
   left when Rapidli stopped are listed in Get models with Resume and Delete; the checksum step is shown and can be
   cancelled. tests/test_fetch.py covers both.
+- A finished download asked for a new look through the model folders every second while Get models was open (5-8 s
+  each); "Look for new downloads" waited behind them. It is asked for once per finished download now, looks asked for
+  while one runs share it, the menu shows the last result (not a "looking" menu opened late), it names the models still
+  downloading, and a finished vision projector says it is not a model of its own.
 
 ## Eject and delete models (23 Nov 2026)
 

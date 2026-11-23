@@ -380,8 +380,18 @@ def engine_stats():
         return None
 
 
+_SCAN = {"lock": threading.Lock(), "at": 0.0}
+
+
 def model_list(refresh=False):
-    ms = models.scan(refresh=refresh)
+    # a look asked for while another runs waits for it and takes its list (they had piled up, one a second, 23 Nov)
+    asked = time.monotonic()
+    with _SCAN["lock"]:
+        if refresh and _SCAN["at"] > asked and STATE.get("models") is not None:
+            return STATE["models"]
+        ms = models.scan(refresh=refresh)
+        if refresh:
+            _SCAN["at"] = time.monotonic()
     seen, out = set(), []
     for m in ms:
         k = (m["file"].lower(), m["bytes"])
