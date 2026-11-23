@@ -30,6 +30,7 @@ edit("llama-moe-cache.cpp", [
         }
     }
 
+    // the device that caches layer il
     ggml_backend_t backend(int32_t il) const {""",
      """                        (double) g.n_slots/(g.layers.size()*n_expert_used));
                 }
@@ -91,5 +92,6 @@ edit("llama-moe-cache.cpp", [
             ok/1073741824.0, all/1073741824.0, m.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
     }
 
+    // the device that caches layer il
     ggml_backend_t backend(int32_t il) const {"""),
 ])

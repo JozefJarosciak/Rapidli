@@ -483,6 +483,70 @@ def fit_moe(path, sp, common, margin, port, say, note, lanes_fixed, key):
     return out
 
 
+def kv_cell_mb(path):
+    """MiB of attention cache per token of context, from the model's own header (f16 keys and values in every layer
+    that has attention; in a hybrid with full_attention_interval, only those layers). None when the header says too
+    little."""
+    try:
+        import models
+        m = models.header(path, want_template=False)
+    except Exception:
+        return None
+    arch = str(m.get("general.architecture", ""))
+    a = lambda k, d=None: m.get(f"{arch}.{k}", d)
+    n_layer = int(a("block_count", 0) or 0)
+    heads = a("attention.head_count", 0)
+    heads = max(heads) if isinstance(heads, list) and heads else int(heads or 0)
+    kv = a("attention.head_count_kv", heads)
+    kv = max(kv) if isinstance(kv, list) and kv else int(kv or heads or 0)
+    embd = int(a("embedding_length", 0) or 0)
+    k_len = int(a("attention.key_length", 0) or (embd // heads if heads else 0))
+    v_len = int(a("attention.value_length", 0) or k_len)
+    every = int(a("full_attention_interval", 0) or 0)
+    layers = n_layer // every if every > 1 else n_layer
+    if not (layers and kv and k_len):
+        return None
+    return layers * kv * (k_len + v_len) * 2 / 2**20
+
+
+def probe_budget(path, common, margin, mmproj=None, lanes=8):
+    """What the 8-lane probe must give up to fit next to the model: {"vault", "spec_ctx", "ctx_extra"} with smaller
+    values, in that order (the parked states first, down to 8; the drafting context down to 4k; the conversation
+    context down to 8k), or {} (it fits, or the model's cache size is not known). Every cell of the probe costs
+    attention cache in each layer that has attention: (8 lanes + the parked states) x 300 cells, the conversation
+    context and the drafting context. On Qwen 3.8 that is small; Inkling-2-Mini has attention in all 48 layers, and
+    its probe (88 x 300 + 8k cells, 6.5 GB) next to 15.5 GB of weights filled the card and crawled for 10 minutes
+    (23 Nov)."""
+    per_cell = kv_cell_mb(path)
+    if not per_cell:
+        return {}
+    try:
+        used, total = card()
+    except Exception:
+        return {}
+    model_mb = os.path.getsize(path) / 2**20 + (os.path.getsize(mmproj) / 2**20 if mmproj and os.path.exists(mmproj) else 0)
+    # cells the attention cache may hold: what is left after the weights, the margin and ~1.5 GB of buffers
+    cells = (total - used - margin - model_mb - 1536) / per_cell
+    vault, ctx = int(common.get("vault") or 0), int(common["ctx_extra"])
+    # (the drafting context is there for MTP drafting ("spec") and for drafting by copying ("lookup") alike)
+    spec = int(common.get("spec_ctx") or 0) if (common.get("spec") or common.get("lookup")) else 0
+    need = lambda v, s, c: (lanes + v) * CTX + s + c
+    if need(vault, spec, ctx) <= cells:
+        return {}
+    out = {}
+    if vault > 8:
+        vault = max(8, min(vault, int((cells - spec - ctx) // CTX) - lanes))
+        out["vault"] = vault
+    if need(vault, spec, ctx) > cells and spec > 4096:
+        spec = 4096
+        out["spec_ctx"] = spec
+    if need(vault, spec, ctx) > cells and ctx > min(CONTEXTS):
+        fitting = [c for c in CONTEXTS if need(vault, spec, c) <= cells]
+        ctx = max(fitting) if fitting else min(CONTEXTS)
+        out["ctx_extra"] = ctx
+    return out
+
+
 def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=print, kv=None, fresh=False, ctx_max=262144, mmproj=None, lanes_fixed=None, note=None):
     """Starts the engine on `path` with as many lanes as fit (or lanes_fixed, when the user set a number).
     mmproj: the vision projector to load with the model.
@@ -527,6 +591,10 @@ def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=p
     if reuses(key, fresh, lanes_fixed):
         f0 = fits[key]
         common["ctx_extra"] = int(f0.get("ctx_extra") or common["ctx_extra"])
+        # (the parked states and the drafting context as the probe cut them: a kept fit of Inkling started with 80
+        # parked states again and filled the card)
+        common.update({k: v for k, v in probe_budget(path, common, margin, mmproj, lanes=f0["lanes"]).items() if k != "ctx_extra"})
+        vault = int(common.get("vault") or vault)
         say(f"starting with {f0['lanes']} lanes and {common['ctx_extra'] // 1024}k of conversation context (fitted {f0.get('at', '')})")
         eng.start(lanes=f0["lanes"], **common)
         used, total = card()
@@ -563,6 +631,14 @@ def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=p
                 say("slower than when fitted (other programs hold more of the card now): fitting again")
                 note("refit")
     # 1. the probe
+    cut = probe_budget(path, common, margin, mmproj)
+    if cut:
+        say("this model's attention cache is large: " + ", ".join(
+            {"vault": f"{cut.get('vault')} parked conversations instead of {common.get('vault')}",
+             "spec_ctx": f"{cut.get('spec_ctx', 0) // 1024}k of drafting context",
+             "ctx_extra": f"{cut.get('ctx_extra', 0) // 1024}k of conversation context"}[k] for k in cut))
+        common.update(cut)
+        vault = int(common.get("vault") or vault)
     say("probe: 8 lanes")
     t_probe = time.time()
     eng.start(lanes=8, **common)

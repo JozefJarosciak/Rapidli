@@ -2062,7 +2062,17 @@ def end_stuck(t, why):
             with h.__dict__.setdefault("wlock", threading.Lock()):
                 msg = ("The answer stopped making progress and was ended (" + why + "). Write it again with the button "
                        "below; if this happens again, the details are in " + (os.path.basename(path) if path else "data/logs") + ".")
-                h.wfile.write(b"data: " + json.dumps({"type": "error", "message": msg}, ensure_ascii=False).encode() + b"\n\n")
+                # (an API request collecting its answer has sent no headers yet: it gets an HTTP error, not an event
+                # line, which a client read as a broken status line, 23 Nov; a streamed OpenAI-style one gets a chunk)
+                if h.__dict__.get("api_stream"):
+                    h.wfile.write(b"data: " + json.dumps({"error": {"message": msg, "type": "rapidli", "code": 504}}, ensure_ascii=False).encode()
+                                  + b"\n\ndata: [DONE]\n\n")
+                elif h.__dict__.get("api_captured"):
+                    body = json.dumps({"error": {"message": msg, "type": "rapidli", "code": 504}}, ensure_ascii=False).encode()
+                    h.wfile.write(b"HTTP/1.1 504 Gateway Timeout\r\nContent-Type: application/json\r\nContent-Length: "
+                                  + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
+                else:
+                    h.wfile.write(b"data: " + json.dumps({"type": "error", "message": msg}, ensure_ascii=False).encode() + b"\n\n")
                 h.wfile.flush()
         except Exception:
             pass
@@ -2418,10 +2428,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response = self.send_header = lambda *a, **k: None
         self.end_headers = lambda *a, **k: None
         self.send_json = lambda obj, code=200: errs.append((obj, code))
+        self.api_captured = True                     # (end_stuck: no headers sent yet)
         try:
             self.send_answer(body)
         finally:
-            for n in ("sse", "send_response", "send_header", "end_headers", "send_json"):
+            for n in ("sse", "send_response", "send_header", "end_headers", "send_json", "api_captured"):
                 self.__dict__.pop(n, None)
         return events, errs
 
@@ -2486,6 +2497,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
+        self.api_stream = True                       # (end_stuck: the headers are sent, it ends with a chunk)
         wf = self.wfile
         sent, planned = [""], [False]
 

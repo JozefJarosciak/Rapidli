@@ -1,5 +1,30 @@
 # Changelog
 
+## Engine on llama.cpp b12631, Inkling 2 (23 Nov 2026)
+
+- The engine is built on Unsloth's llama.cpp release b12631-mix-acc0843 (commit 59f6620) instead of b12347
+  (c2cf5f98). It reads Inkling 2's looped layout: Unsloth's Inkling-2-Mini GGUFs stopped with "key not found in
+  model: inkling2.d_rel" before. Three patches were adapted (docs/BUILDING.md); engine.cpp is unchanged. The headers
+  in engine/llama are the new release's. Measured on an RTX 4090, three runs of `tests/lane_speed.py 800`:
+  Qwen3.8-35B-A3B IQ3_M 1 / 8 / 32 lanes 175 / 818 / 1,625 -> 191 / 858 / ~1,700 tok/s; Ternary-Bonsai-2-27B Q2_0
+  80 / 485 / 1,180 -> 85 / 500 / 1,250. The build scripts and docs name the new source and its checksums;
+  build-linux.sh refuses a source tree of the old release.
+- Inkling 2's chat format (`<|message_user|><|content_text|>…<|end_message|>`): its answers are written without
+  thinking (effort 0); "Think per part" works as with any model. Inkling-2-Mini UD-Q4_K_M with its vision projector
+  on a 24 GB card: 23 lanes, a short answer 1.5 s, Medium 11 s on 7 lanes, Longest 2,616 tokens in 21 s on 23 lanes
+  (126 tok/s together).
+- Fitting: the probe's attention cache is budgeted from the model's header (keys and values of every layer with
+  attention). Where 8 lanes, the parked conversations, the drafting context and the conversation context would not fit
+  beside the weights, the parked conversations are cut first (down to 8), then the drafting context (4k), then the
+  conversation context (8k); a kept fit is started with the same cuts. Inkling-2-Mini's probe (80 parked conversations,
+  6.5 GB of cache next to 15.5 GB) had filled the card and crawled.
+- An API request whose answer stalled got an event line instead of an HTTP response; it gets a 504 with the API's
+  error now (a streamed OpenAI-style one, an error chunk and `[DONE]`).
+- Downloads: a .part without notes starts over (one of 2 GB, left from an older download, failed its checksum after
+  12.7 GB).
+- Not yet done on the new engine: Qwen3.8-Flash-Next (experts in the PC's memory), the Linux build, images with
+  Inkling, and Inkling's other layout (Mainline_Support, `inkling2_loop`).
+
 ## API: models and answer options (23 Nov 2026)
 
 - `GET /api/v1/models` lists every model on the PC; `POST /api/v1/models/load` (`model`: id or label, `wait`,

@@ -85,19 +85,31 @@ Rules for a paragraph: as long as the note under the question says. Cover only i
 TPL = {"kind": "chatml", "think": True, "levels": []}
 USER_OPEN = "<|im_start|>user\n"
 TURN_END = "<|im_end|>\n"
+MODEL_END = "\n" + TURN_END          # what closes an answer in the conversation (before the next user turn)
+TAIL_GAP = "\n\n"                    # the lane's own first text after CHAT_TAIL, kept in the conversation
+# Inkling 2: every message is <|message_ROLE|><|content_text|>...<|end_message|>; the thinking effort is a system
+# message before the first user one ("0": no thinking); an answer ends with <|content_model_end_sampling|>
+INK_EFFORT = "<|message_system|><|content_text|>Thinking effort level: 0<|end_message|>"
 
 
 def set_template(kind="chatml", think=True):
     """The chat format of the model in the engine: "chatml" (Qwen, Bonsai; think = the template has a think block,
-    which is left empty) or "gemma4" (<|turn>user ... <turn|>)."""
-    global CHAT_TAIL, USER_OPEN, TURN_END
+    which is left empty), "gemma4" (<|turn>user ... <turn|>) or "inkling" (Inkling 2: <|message_user|> ...,
+    the answer opened as text, so it is written without thinking)."""
+    global CHAT_TAIL, USER_OPEN, TURN_END, MODEL_END, TAIL_GAP
     TPL.update(kind=kind, think=think)
     if kind == "gemma4":
         USER_OPEN, TURN_END = "<|turn>user\n", "<turn|>\n"
         CHAT_TAIL = "<turn|>\n<|turn>model"
+        MODEL_END, TAIL_GAP = "\n" + TURN_END, "\n\n"
+    elif kind == "inkling":
+        USER_OPEN, TURN_END = "<|message_user|><|content_text|>", "<|end_message|>"
+        CHAT_TAIL = "<|end_message|><|message_model|><|content_text|>"
+        MODEL_END, TAIL_GAP = "<|end_message|><|content_model_end_sampling|>", ""
     else:
         USER_OPEN, TURN_END = "<|im_start|>user\n", "<|im_end|>\n"
         CHAT_TAIL = "<|im_end|>\n<|im_start|>assistant" + ("\n<think>\n\n</think>" if think else "")
+        MODEL_END, TAIL_GAP = "\n" + TURN_END, "\n\n"
 
 
 def template_of(chat_template):
@@ -105,6 +117,8 @@ def template_of(chat_template):
     t = str(chat_template or "")
     if "<|turn>" in t:
         return "gemma4", False
+    if "<|message_user|>" in t and "<|content_text|>" in t:
+        return "inkling", False
     return "chatml", "<think>" in t
 
 
@@ -136,6 +150,8 @@ def thinking_levels(chat_template):
 def chat_head(system):
     if TPL["kind"] == "gemma4":
         return "<|turn>system\n" + system + "<turn|>\n<|turn>user\n"
+    if TPL["kind"] == "inkling":
+        return "<|message_system|><|content_text|>" + system + "<|end_message|>" + INK_EFFORT + USER_OPEN
     return "<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n"
 
 
@@ -162,6 +178,8 @@ def has_images(text):
 
 def system_block(text):
     """A system turn (the user's standing instructions for a plain answer)."""
+    if TPL["kind"] == "inkling":             # (the effort line always: without it the model thinks, at 0.9)
+        return ("<|message_system|><|content_text|>" + text + "<|end_message|>" if text else "") + INK_EFFORT
     if not text:
         return ""
     if TPL["kind"] == "gemma4":
@@ -177,11 +195,11 @@ def history_text(history):
         if m.get("role") == "user":
             if prev == "user":                # a question whose answer was deleted: an empty answer keeps the turns in order
                 out += "\n" + TURN_END + USER_OPEN
-            out += with_images(m.get("content", ""), m.get("images")) + CHAT_TAIL + "\n\n"
+            out += with_images(m.get("content", ""), m.get("images")) + CHAT_TAIL + TAIL_GAP
         elif m.get("role") == "assistant":
             if prev == "assistant":           # an answer whose question was deleted: an empty question in front of it
-                out += CHAT_TAIL + "\n\n"
-            out += str(m.get("content", "")).strip() + "\n" + TURN_END + USER_OPEN
+                out += CHAT_TAIL + TAIL_GAP
+            out += str(m.get("content", "")).strip() + MODEL_END + USER_OPEN
         prev = m.get("role")
     return out
 

@@ -29,6 +29,11 @@ new = """                return table_id == MMVQ_PARAMETERS_GENERIC && mmvq_two_
             case 7:
             case 8:
                 return (type == GGML_TYPE_Q2_0 && table_id == MMVQ_PARAMETERS_GENERIC) ? 4 : 2;   // RAPIDLI-MMVQROWS"""
+# (b12631: the line for one token also names RDNA1; the lines patched are the same)
+first_old = "                return table_id == MMVQ_PARAMETERS_GENERIC && mmvq_two_rows_ncols1(type) ? 2 : 1;"
+first_new = "                return (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_RDNA1) && mmvq_two_rows_ncols1(type) ? 2 : 1;"
+if s.count(old) != 1 and s.count(old.replace(first_old, first_new)) == 1:
+    old, new = old.replace(first_old, first_new), new.replace(first_old, first_new)
 assert s.count(old) == 1, "the place to patch was not found"
 io.open(P, "w", encoding="utf8", newline="\n").write(s.replace(old, new))
 print("4 rows a block for Q2_0 with 2 to 8 tokens")

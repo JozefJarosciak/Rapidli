@@ -24,7 +24,7 @@ engine/llama/obj/
 engine/llama/src/
 engine/llama/*.log
 engine/llama-src/
-engine/cuda/out/
+engine/cuda/out*/
 engine/src/obj/
 engine/src/*.log
 engine/src/*.exe
@@ -53,3 +53,4 @@ engine/src/build_spec.bat
 engine/src/lanedraft_bench.cpp
 tools/testbench/
 dist/
+engine/bin-*/

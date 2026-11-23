@@ -13,10 +13,11 @@
 #   PORTABLE=1 ...                        processor code for any x86-64 with AVX2, not only this computer's
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-COMMIT=c2cf5f983a01bc2ea7a5d68a7ce4fb171e6fe335          # the llama.cpp source the patches are written for
+COMMIT=59f66204f52c1a69fdae7a90ae9d75de7a7b683d          # the llama.cpp source the patches are written for
+RELEASE=b12631-mix-acc0843                                # Unsloth's release of it (upstream b12631)
 # Unsloth publishes this source as a release download only (the commit is not in the fork's git history)
-TARBALL_URL="https://github.com/unslothai/llama.cpp/releases/download/b12347-mix-241a0f3/llama.cpp-source-commit-$COMMIT.tar.gz"
-TARBALL_SHA256=bc280e70bba1a486b8f294ce1b0b4a255d67efbd9fb3db2e58dba920d94d5be0
+TARBALL_URL="https://github.com/unslothai/llama.cpp/releases/download/$RELEASE/llama.cpp-source-commit-$COMMIT.tar.gz"
+TARBALL_SHA256=468127662ae8bdba4281c25ffe87e383a3db9b9e42f3179c7f3925db0e432d85
 SRC="${LLAMA_SRC:-$HERE/llama-src}"
 PY="${PYTHON:-python3}"
 JOBS="${JOBS:-$(nproc)}"
@@ -32,6 +33,12 @@ if [ ! -f "$SRC/CMakeLists.txt" ]; then
   echo "$TARBALL_SHA256  $TGZ" | sha256sum -c - || { echo "the llama.cpp source download does not match its checksum"; exit 1; }
   tar -xzf "$TGZ" -C "$SRC" --strip-components=1
   rm -f "$TGZ"
+  echo "$COMMIT" > "$SRC/.rapidli-commit"
+fi
+# a tree downloaded by an older version of this script holds another source: the patches would not fit it
+if [ -z "${LLAMA_SRC:-}" ] && [ "$(cat "$SRC/.rapidli-commit" 2>/dev/null)" != "$COMMIT" ]; then
+  echo "$SRC holds an older llama.cpp source than this script builds ($RELEASE): remove that folder and run the script again"
+  exit 1
 fi
 
 # The patches apply to untouched source only, so the original files are kept; every run patches a fresh copy of them

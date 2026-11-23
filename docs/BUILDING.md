@@ -5,12 +5,23 @@ with its CUDA backend, and `mtmd` for vision. The built files are not in the rep
 a release.
 
 Everything is built from one source: llama.cpp in Unsloth's fork, `unslothai/llama.cpp` at commit
-`c2cf5f983a01bc2ea7a5d68a7ce4fb171e6fe335`. Unsloth publishes that source as a release download only
-([`llama.cpp-source-commit-c2cf5f9….tar.gz`](https://github.com/unslothai/llama.cpp/releases/tag/b12347-mix-241a0f3),
-sha256 `bc280e70bba1a486b8f294ce1b0b4a255d67efbd9fb3db2e58dba920d94d5be0`): the commit is not in the fork's git
-history, so a `git checkout` of it fails. The engine uses functions that only this fork has (`llama_batch_ext_*`,
-the MTP drafting context) and two that Rapidli's patches add (`llama_fq_fork`, `llama_fq_set_sampling`), so mainline
-llama.cpp will not build it as it is.
+`59f66204f52c1a69fdae7a90ae9d75de7a7b683d`, Unsloth's release
+[`b12631-mix-acc0843`](https://github.com/unslothai/llama.cpp/releases/tag/b12631-mix-acc0843) of upstream b12631.
+Unsloth publishes that source as a release download only (`llama.cpp-source-commit-59f6620….tar.gz`, sha256
+`468127662ae8bdba4281c25ffe87e383a3db9b9e42f3179c7f3925db0e432d85`; the release's
+`llama.cpp-source-b12631-mix-acc0843.tar.gz` is the same file): the commit is not in the fork's git history, so a
+`git checkout` of it fails. The engine uses functions that only this fork has (`llama_batch_ext_*`, the MTP drafting
+context) and two that Rapidli's patches add (`llama_fq_fork`, `llama_fq_set_sampling`), so mainline llama.cpp will
+not build it as it is.
+
+Until 23 Nov 2026 the engine was built on the fork's release `b12347-mix-241a0f3` (commit `c2cf5f98`). The move to
+b12631 brought Inkling 2's looped layout (Unsloth's Inkling-2-Mini GGUFs did not load before: "key not found in model:
+inkling2.d_rel"). The patches needed three changes for it: `patch_direct.py` (the recurrent-state input has a new
+caller, Inkling 2's memory, and upstream clears the zero cell with `ggml_fill_inplace`), `patch_zzmoepin.py` (a comment
+upstream added above its anchor) and `engine/cuda/patch_zmmvqrows.py` (the line for one token also names RDNA1).
+`engine.cpp` built unchanged. On an RTX 4090 the new engine was faster with every model measured
+(`tests/lane_speed.py 800`, three runs each): Qwen3.8-35B-A3B IQ3_M 1 / 8 / 32 lanes 175 / 818 / 1,625 -> 191 / 858 /
+~1,700 tok/s, Ternary-Bonsai-2-27B Q2_0 80 / 485 / 1,180 -> 85 / 500 / 1,250.
 
 ## Linux
 
@@ -29,7 +40,11 @@ take most of the time: about 15 minutes on 20 cores.
 files in `.orig`, patches a fresh copy of them at every run and copies over only the files that changed, so it can be
 run again after a change to a patch without compiling everything once more.
 
-Run on 19 Nov 2026 under Ubuntu 22.04 in WSL 2 with g++ 11.4, CMake 3.22 and CUDA 12.6 on an RTX 4090: the engine
+A source tree an older version of the script downloaded (`engine/llama-src`, for b12347) is refused with a message:
+remove it and run the script again. The script has not yet been run on b12631; the patches it applies are the ones
+the Windows build above used.
+
+Run on 19 Nov 2026 (b12347) under Ubuntu 22.04 in WSL 2 with g++ 11.4, CMake 3.22 and CUDA 12.6 on an RTX 4090: the engine
 built, `start.sh` loaded Ternary-Bonsai-2-27B Q2_0 in 24 s and fitted its lanes, and `tests/lane_speed.py` measured
 70 tokens a second on one lane and 1,231 with 32 lanes. A model file on a Windows drive (`/mnt/c/...`) loads very
 slowly from WSL (a 16 GB model took more than four minutes): keep models on the Linux disk.
@@ -38,41 +53,56 @@ slowly from WSL (a 16 GB model took more than four minutes): keep models on the 
 
 Most Windows users do not build: the release download has `engine\bin` ready. Building it needs Visual Studio 2022
 Build Tools (x64), the CUDA 13 toolkit, CMake and Ninja, Python with the `py` launcher and Git for Windows (for `sh`).
-The scripts take llama.cpp's headers, vendor code and prebuilt `ggml` from an Unsloth Studio install whose llama.cpp
-is the source above (its `UNSLOTH_PREBUILT_INFO.json` says `"source_commit": "c2cf5f98…"`, release
-`b12347-mix-241a0f3`); `LLAMA_DIR` names it (default `%USERPROFILE%\.unsloth\llama.cpp`). With another release of
-llama.cpp there, the patches stop at their first text check. Nothing in that folder is changed.
+The scripts take llama.cpp's source, headers and vendor code, and the fork's prebuilt `ggml` and `mtmd`, from one
+folder that `LLAMA_DIR` names: the source above, with the fork's Windows build of the same release in its
+`build\bin\Release`. (An Unsloth Studio install, `%USERPROFILE%\.unsloth\llama.cpp`, the default, has that layout, but
+only one of the same release works: with another one the patches stop at their first text check.) Nothing in that
+folder is changed by the llama build.
+
+```
+rem the source and the fork's Windows build of the same release, checked (Windows' own tar.exe: Git's reads "C:" as a host)
+set R=https://github.com/unslothai/llama.cpp/releases/download/b12631-mix-acc0843
+curl -fLo llama-src.tar.gz %R%/llama.cpp-source-commit-59f66204f52c1a69fdae7a90ae9d75de7a7b683d.tar.gz
+certutil -hashfile llama-src.tar.gz SHA256     must print 468127662ae8bdba4281c25ffe87e383a3db9b9e42f3179c7f3925db0e432d85
+curl -fLo llama-win.zip %R%/app-b12631-mix-acc0843-windows-x64-cuda13-older.zip
+certutil -hashfile llama-win.zip SHA256        must print dda2ac69d585959f22b1e8bf5486650c4c3fde9c85bec4bd22768ae3c3428289
+mkdir C:\src\llama-src && %SystemRoot%\System32\tar.exe -xzf llama-src.tar.gz -C C:\src\llama-src --strip-components=1
+mkdir C:\src\llama-src\build\bin\Release && %SystemRoot%\System32\tar.exe -xf llama-win.zip -C C:\src\llama-src\build\bin\Release
+set LLAMA_DIR=C:\src\llama-src
+```
+
+Then, with `LLAMA_DIR` set:
 
 ```
 sh engine/llama/rebuild.sh        a fresh copy of the fork's src, every patch in name order, build.bat,
                                   and the result installed as engine\bin\llama.dll
-engine\llama\make_mtmd_lib.bat    the import library for mtmd.dll (vision) from its exports
+engine\llama\make_mtmd_lib.bat    the import library for mtmd.dll (vision) from its exports (copy the release's
+                                  mtmd.dll into engine\bin first)
 engine\src\build.bat              compiles engine.cpp and installs rapidli-engine.exe into engine\bin
-                                  ("ENGINE BUILD OK")
+                                  ("ENGINE BUILD OK"; delete engine\src\obj\httplib.obj after a change of release)
 ```
 
 `rebuild.sh` was run on 19 Nov 2026 from the repository's files alone (a copy with no `lib`, `obj`, `bin` or `src`
 folder): BUILD OK, a `llama.dll` of 3,316,736 bytes that exports `llama_fq_fork` and `llama_fq_set_sampling`. Two runs
-give the same code byte for byte, so a change to a patch can be checked by comparing the libraries.
+give the same code byte for byte, so a change to a patch can be checked by comparing the libraries. On b12631 (23 Nov
+2026): a `llama.dll` of 3,419,648 bytes, built in about 2 minutes.
 
 `ggml.dll`, `ggml-base.dll`, the `ggml-cpu-*.dll` variants and `mtmd.dll` in `engine\bin` are the fork's own build.
-The release's `ggml-cuda.dll` was built as below with CUDA 13.0 for 75;86;89;120 (about 5 minutes on 24 threads).
-`ggml-cuda.dll` is not: it is built from the fork's source with the patches in `engine/cuda`:
+`ggml-cuda.dll` is not: it is built from the fork's source with the patches in `engine/cuda` (the patches change the
+source tree, so keep a copy of `ggml\src\ggml-cuda` to run them again on):
 
 ```
-rem the source above, downloaded and checked (Windows' own tar.exe; Git's tar reads "C:" as a host name)
-curl -fLo llama-src.tar.gz https://github.com/unslothai/llama.cpp/releases/download/b12347-mix-241a0f3/llama.cpp-source-commit-c2cf5f983a01bc2ea7a5d68a7ce4fb171e6fe335.tar.gz
-certutil -hashfile llama-src.tar.gz SHA256          must print bc280e70bba1a486b8f294ce1b0b4a255d67efbd9fb3db2e58dba920d94d5be0
-mkdir C:\src\llama-src && %SystemRoot%\System32\tar.exe -xzf llama-src.tar.gz -C C:\src\llama-src --strip-components=1
 set LLAMA_SRC=C:\src\llama-src
 for %p in (engine\cuda\patch_*.py) do py -X utf8 %p     every patch once, in name order, on the fresh source
 engine\cuda\build_cuda.bat configure  CUDA_ARCH chooses the cards to build for (default 75;86;89;120: RTX 20 to RTX 50)
 ```
 
-`build_cuda.bat` finds CMake on the PATH or in Visual Studio (its "C++ CMake tools"), and needs Ninja on the PATH.
+`build_cuda.bat` finds CMake on the PATH or in Visual Studio (its "C++ CMake tools"), and needs Ninja on the PATH. With
+CUDA 13.0 for 75;86;89;120 it took about 5 minutes on 24 threads for b12347 and 27 minutes for b12631 (more kernels,
+among them NVFP4's).
 
 Then copy `ggml-cuda.dll` from `engine\cuda\out\bin`, and `ggml.dll`, `ggml-base.dll`, the `ggml-cpu-*.dll` files
-and `mtmd.dll` from the Unsloth Studio install's `build\bin\Release`, into `engine\bin`.
+and `mtmd.dll` from `%LLAMA_DIR%\build\bin\Release`, into `engine\bin`.
 
 The CUDA runtime libraries (cuBLAS) are not copied into `engine\bin`: the engine finds them through `CUDA_PATH`, which
 the CUDA installer sets.

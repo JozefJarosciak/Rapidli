@@ -1,5 +1,5 @@
 @echo off
-rem Builds ggml-cuda.dll, the CUDA backend, from the llama.cpp source in %LLAMA_SRC% (Unsloth's fork, commit c2cf5f9)
+rem Builds ggml-cuda.dll, the CUDA backend, from the llama.cpp source in %LLAMA_SRC% (Unsloth's fork, release b12631-mix-acc0843, commit 59f6620)
 rem after the patches in this folder were applied to it (python patch_f16.py ... each once, on a fresh checkout).
 rem Output: out\bin\ggml-cuda.dll; copy it into engine\bin.
 rem   set LLAMA_SRC=D:\src\llama.cpp

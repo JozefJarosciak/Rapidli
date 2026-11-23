@@ -6,7 +6,7 @@ Rapidli's own code is under the MIT licence (see `LICENSE`). It builds on the wo
 
 | What | Where | Licence |
 |---|---|---|
-| llama.cpp, in Unsloth's fork (`unslothai/llama.cpp`, commit `c2cf5f9`): headers, and the `src/` copy that `engine/llama/rebuild.sh` patches | `engine/llama/include`, `engine/llama/ggml/include`, `engine/llama/gen`, `engine/llama/src` (generated, not committed) | MIT, Copyright (c) 2023-2026 The ggml authors |
+| llama.cpp, in Unsloth's fork (`unslothai/llama.cpp`, release `b12631-mix-acc0843`, commit `59f6620`): headers, and the `src/` copy that `engine/llama/rebuild.sh` patches | `engine/llama/include`, `engine/llama/ggml/include`, `engine/llama/gen`, `engine/llama/src` (generated, not committed) | MIT, Copyright (c) 2023-2026 The ggml authors |
 
 The patches in `engine/llama/patch_*.py` and `engine/cuda/patch_*.py` are Rapidli's own (MIT) and apply to that
 source.

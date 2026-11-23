@@ -16,5 +16,5 @@ engine/build-linux.sh and CUDA 12.8 or newer.
 Rapidli has been tested on Windows 11 with an RTX 4090. The Linux engine was built and started under WSL 2 only; it has
 not been tested on a Linux installed directly on a machine. Reports are welcome.
 
-Built from Rapidli's source with llama.cpp (Unsloth's fork, source c2cf5f98, MIT licence: LICENSE.llama.cpp and
+Built from Rapidli's source with llama.cpp (Unsloth's fork, release b12631-mix-acc0843, source 59f66204, MIT licence: LICENSE.llama.cpp and
 THIRD_PARTY_LICENSES.txt in this archive). Rapidli itself is MIT licensed.

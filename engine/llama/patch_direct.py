@@ -22,7 +22,9 @@ def patch(name, pairs):
     s = open(p, encoding="utf8").read().replace(chr(13) + NL, NL)
     for pair in pairs:
         a, b, cnt = pair[0], pair[1], (pair[2] if len(pair) > 2 else 1)
-        assert s.count(a) == cnt, (name, a[:70], s.count(a))
+        # cnt "all": every place (call sites of a function whose signature changes: upstream adds callers, b12631 the
+        # Inkling-2 memory input), at least one
+        assert (s.count(a) >= 1) if cnt == "all" else (s.count(a) == cnt), (name, a[:70], s.count(a))
         s = s.replace(a, b)
     open(p, "w", encoding="utf8", newline=NL).write(s)
 
@@ -166,14 +168,14 @@ void llm_rs_prepare(const llama_memory_recurrent_context * mctx, bool direct) {
 
     return (llm_graph_input_rs *) res->add_input(std::move(inp));"""),
     ("""    auto inp_rs   = build_rs_inp_impl     (ctx0, ubatch, mctx_cur->get_recr());""",
-     """    auto inp_rs   = build_rs_inp_impl     (ctx0, ubatch, mctx_cur->get_recr(), cparams.n_rs_seq);""", 2),
+     """    auto inp_rs   = build_rs_inp_impl     (ctx0, ubatch, mctx_cur->get_recr(), cparams.n_rs_seq);""", "all"),
     ("""    auto inp_rs = build_rs_inp_impl(ctx0, ubatch, mctx_cur->get_recr());""",
-     """    auto inp_rs = build_rs_inp_impl(ctx0, ubatch, mctx_cur->get_recr(), cparams.n_rs_seq);"""),
+     """    auto inp_rs = build_rs_inp_impl(ctx0, ubatch, mctx_cur->get_recr(), cparams.n_rs_seq);""", "all"),
     ("""    res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
 """,
      """    res &= !inp_rs->rs_z_used || inp_rs->rs_z == mctx->get_recr()->get_rs_z();
     res &= inp_rs->direct == llm_rs_direct(params.ubatch, mctx->get_recr(), params.cparams.n_rs_seq);
-""", 3),
+""", "all"),
     ("""#include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -195,7 +197,7 @@ void llm_rs_prepare(const llama_memory_recurrent_context * mctx, bool direct) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));""",
      """    llm_rs_prepare(mctx->get_recr(), inp_rs->direct);
     if (inp_rs->s_copy && inp_rs->s_copy->buffer) {
-        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));""", 3),
+        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));""", "all"),
     ("""    const auto * kv_state = inp->mctx;
 
     // a custom getter reads the states of the ubatch straight from the cache, so the gather skips the first""",
@@ -210,10 +212,11 @@ void llm_rs_prepare(const llama_memory_recurrent_context * mctx, bool direct) {
 
     // a custom getter reads the states of the ubatch straight from the cache, so the gather skips the first"""),
     # the graph's own clear of the zero cell works on float32 caches only (a 16-bit one is cleared in llm_rs_prepare)
-    ("""    ggml_build_forward_expand(gf, ggml_scale_inplace(ctx0, state_zero, 0));
+    # (b12631: upstream clears it with ggml_fill_inplace instead of a scale by 0)
+    ("""    ggml_build_forward_expand(gf, ggml_fill_inplace(ctx0, state_zero, 0.0f));
 """,
      """    if (states->type == GGML_TYPE_F32) {
-        ggml_build_forward_expand(gf, ggml_scale_inplace(ctx0, state_zero, 0));
+        ggml_build_forward_expand(gf, ggml_fill_inplace(ctx0, state_zero, 0.0f));
     }
 """),
 ])

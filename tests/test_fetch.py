@@ -114,13 +114,13 @@ try:
     again = [r for r in seen[before:] if r[1] - r[0] > 0]
     check("started again it fetches only the missing pieces", job.get("state") == "done" and len(again) == 9 - kept and sha(p) == WHOLE, (job.get("state"), len(again), 9 - kept))
 
-    # 3. a part left by a one-connection download (no notes): its whole pieces are kept
+    # 3. a part without notes (nothing tells how it was written): it is fetched again from the start
     p, job = os.path.join(tmp, "c.bin"), {}
-    open(p + ".part", "wb").write(content(0, 20 * MB))
+    open(p + ".part", "wb").write(bytes(20 * MB))
     before = len(seen)
     fetch.download(url, p, job, connections=3, sha256=WHOLE)
     again = [r for r in seen[before:] if r[1] - r[0] > 0]
-    check("a part without notes goes on after its whole pieces", job.get("state") == "done" and len(again) == 7 and sha(p) == WHOLE, (job.get("state"), len(again)))
+    check("a part without notes is fetched again from the start", job.get("state") == "done" and len(again) == 9 and sha(p) == WHOLE, (job.get("state"), len(again)))
 
     # 4. a checksum that does not match
     p, job = os.path.join(tmp, "d.bin"), {}

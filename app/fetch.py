@@ -91,10 +91,10 @@ def _pieces(url, path, job, headers, total, connections, mirrors=()):
         if st.get("total") == total and st.get("piece") == PIECE and os.path.getsize(part) == total:
             done = {int(i) for i in st.get("done", []) if 0 <= int(i) < n}
     except Exception:
-        # a .part without notes is what one connection wrote from the start: its whole pieces are kept. Not one of full
-        # length: that is what this function makes before any piece is fetched (it is started over)
-        if os.path.exists(part) and not os.path.exists(note) and os.path.getsize(part) < total:
-            done = set(range(min(n, os.path.getsize(part) // PIECE)))
+        # a .part without notes is started over: nothing tells how it was written. Taken for one connection's work from
+        # the start, a full-length one (as this function makes it) was kept as all zeros, and a 2 GB one failed its
+        # checksum after 12.7 GB (Inkling-2-Mini, 23 Nov)
+        done = set()
     with open(part, "r+b" if os.path.exists(part) else "wb") as f:
         f.truncate(total)                         # its full length now: every piece has its place
     todo = [i for i in range(n) if i not in done]
