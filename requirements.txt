@@ -1,0 +1,5 @@
+# Rapidli itself runs on the Python standard library (Python 3.10 or newer). These three add features; without one,
+# the feature it serves falls back or is switched off. libzim reads the offline Wikipedia that comes with Rapidli:
+ddgs>=9        # web search through several engines (without it: DuckDuckGo's page only)        MIT
+pypdf>=5       # the text of attached PDFs                                                      BSD-3-Clause
+libzim>=3.4    # offline Wikipedia from Kiwix .zim files                                        GPL-3.0-or-later

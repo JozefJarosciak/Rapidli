@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 484" font-family="Inter, 'Segoe UI', system-ui, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">How Rapidli writes an answer quickly</title>
+  <desc id="d">The question is read once and kept in the engine. One lane plans the answer; then every paragraph gets a lane of its own and all lanes are written at the same time, because one pass of the graphics card serves every lane. The parts are joined into the answer. One lane writes about 48 tokens per second; 59 lanes together about 700.</desc>
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7b9399"/>
+    </marker>
+  </defs>
+  <rect width="900" height="484" rx="16" fill="#0f1719"/>
+
+  <!-- the pipeline -->
+  <text x="16" y="30" fill="#e4eef0" font-size="15" font-weight="700">How an answer is written</text>
+
+  <rect x="16" y="96" width="128" height="72" rx="10" fill="#15212a" stroke="#2d434c"/>
+  <text x="80" y="127" fill="#e4eef0" font-size="13" font-weight="700" text-anchor="middle">Your question</text>
+  <text x="80" y="146" fill="#7b9399" font-size="11" text-anchor="middle">+ the conversation</text>
+  <line x1="146" y1="132" x2="164" y2="132" stroke="#7b9399" stroke-width="1.6" marker-end="url(#ar)"/>
+
+  <rect x="168" y="96" width="140" height="72" rx="10" fill="#15212a" stroke="#3fb6c4"/>
+  <text x="238" y="123" fill="#e4eef0" font-size="13" font-weight="700" text-anchor="middle">Read once</text>
+  <text x="238" y="141" fill="#b7c9cc" font-size="11" text-anchor="middle">kept in the engine</text>
+  <text x="238" y="156" fill="#7b9399" font-size="11" text-anchor="middle">every lane starts from it</text>
+  <line x1="310" y1="132" x2="328" y2="132" stroke="#7b9399" stroke-width="1.6" marker-end="url(#ar)"/>
+
+  <rect x="332" y="96" width="150" height="72" rx="10" fill="#15212a" stroke="#b9a6ff"/>
+  <text x="407" y="122" fill="#e4eef0" font-size="13" font-weight="700" text-anchor="middle">Plan · 1 lane</text>
+  <text x="407" y="140" fill="#b7c9cc" font-size="11" text-anchor="middle">brief answer, outline,</text>
+  <text x="407" y="155" fill="#7b9399" font-size="11" text-anchor="middle">the points of each part</text>
+
+  <text x="635" y="30" fill="#b7c9cc" font-size="11" text-anchor="middle">every paragraph gets a lane of its own</text>
+  <g fill="none" stroke="#8b6cff" stroke-width="1.5" stroke-opacity=".75">
+    <path d="M482 132 C522 132 522 46 560 46"/><path d="M482 132 C522 132 522 74 560 74"/>
+    <path d="M482 132 C522 132 522 102 560 102"/><path d="M482 132 C522 132 522 130 560 130"/>
+    <path d="M482 132 C522 132 522 158 560 158"/><path d="M482 132 C522 132 522 186 560 186"/>
+    <path d="M482 132 C522 132 522 214 560 214"/>
+  </g>
+  <g fill="#8b6cff">
+    <rect x="560" y="37" width="150" height="18" rx="9"/><rect x="560" y="65" width="150" height="18" rx="9" fill-opacity=".9"/>
+    <rect x="560" y="93" width="150" height="18" rx="9" fill-opacity=".85"/><rect x="560" y="121" width="150" height="18" rx="9" fill-opacity=".8"/>
+    <rect x="560" y="149" width="150" height="18" rx="9" fill-opacity=".75"/><rect x="560" y="177" width="150" height="18" rx="9" fill-opacity=".7"/>
+    <rect x="560" y="205" width="150" height="18" rx="9" fill-opacity=".65"/>
+  </g>
+  <g fill="#f6f3ff" font-size="10.5" text-anchor="middle">
+    <text x="635" y="50">part 1 · paragraph 1</text><text x="635" y="78">part 1 · paragraph 2</text>
+    <text x="635" y="106">part 2 · paragraph 1</text><text x="635" y="134">part 2 · paragraph 2</text>
+    <text x="635" y="162">part 3 · paragraph 1</text><text x="635" y="190">…</text>
+    <text x="635" y="218">the bottom line</text>
+  </g>
+  <text x="635" y="246" fill="#7b9399" font-size="11" text-anchor="middle">up to 248 lanes, written at the same time</text>
+  <g fill="none" stroke="#6fd3a0" stroke-width="1.5" stroke-opacity=".7">
+    <path d="M710 46 C732 46 732 132 752 132"/><path d="M710 74 C732 74 732 132 752 132"/>
+    <path d="M710 102 C732 102 732 132 752 132"/><path d="M710 130 C732 130 732 132 752 132"/>
+    <path d="M710 158 C732 158 732 132 752 132"/><path d="M710 186 C732 186 732 132 752 132"/>
+    <path d="M710 214 C732 214 732 132 752 132"/>
+  </g>
+
+  <rect x="752" y="96" width="132" height="72" rx="10" fill="#15212a" stroke="#6fd3a0"/>
+  <text x="818" y="122" fill="#e4eef0" font-size="13" font-weight="700" text-anchor="middle">Join</text>
+  <text x="818" y="140" fill="#b7c9cc" font-size="11" text-anchor="middle">repeats dropped,</text>
+  <text x="818" y="155" fill="#7b9399" font-size="11" text-anchor="middle">parts in order</text>
+  <line x1="818" y1="170" x2="818" y2="194" stroke="#7b9399" stroke-width="1.6" marker-end="url(#ar)"/>
+  <text x="818" y="214" fill="#6fd3a0" font-size="13" font-weight="700" text-anchor="middle">Your answer</text>
+
+  <!-- one pass serves every lane -->
+  <rect x="16" y="272" width="430" height="200" rx="12" fill="#131d23" stroke="#22333b"/>
+  <text x="32" y="298" fill="#e4eef0" font-size="13" font-weight="700">One pass of the graphics card serves every lane</text>
+  <rect x="32" y="316" width="96" height="108" rx="8" fill="#1b2a33" stroke="#e8b45a"/>
+  <text x="80" y="356" fill="#e8b45a" font-size="11.5" font-weight="700" text-anchor="middle">the model's</text>
+  <text x="80" y="371" fill="#e8b45a" font-size="11.5" font-weight="700" text-anchor="middle">weights</text>
+  <text x="80" y="392" fill="#7b9399" font-size="10.5" text-anchor="middle">read once</text>
+  <text x="80" y="406" fill="#7b9399" font-size="10.5" text-anchor="middle">per pass</text>
+  <line x1="130" y1="370" x2="150" y2="370" stroke="#7b9399" stroke-width="1.6" marker-end="url(#ar)"/>
+  <g fill="#8b6cff">
+    <g fill-opacity=".95"><rect x="156" y="318" width="20" height="9" rx="2"/><rect x="156" y="331" width="20" height="9" rx="2"/><rect x="156" y="344" width="20" height="9" rx="2"/><rect x="156" y="357" width="20" height="9" rx="2"/><rect x="156" y="370" width="20" height="9" rx="2"/><rect x="156" y="383" width="20" height="9" rx="2"/><rect x="156" y="396" width="20" height="9" rx="2"/><rect x="156" y="409" width="20" height="9" rx="2"/></g>
+    <g fill-opacity=".9"><rect x="182" y="318" width="20" height="9" rx="2"/><rect x="182" y="331" width="20" height="9" rx="2"/><rect x="182" y="344" width="20" height="9" rx="2"/><rect x="182" y="357" width="20" height="9" rx="2"/><rect x="182" y="370" width="20" height="9" rx="2"/><rect x="182" y="383" width="20" height="9" rx="2"/><rect x="182" y="396" width="20" height="9" rx="2"/><rect x="182" y="409" width="20" height="9" rx="2"/></g>
+    <g fill-opacity=".85"><rect x="208" y="318" width="20" height="9" rx="2"/><rect x="208" y="331" width="20" height="9" rx="2"/><rect x="208" y="344" width="20" height="9" rx="2"/><rect x="208" y="357" width="20" height="9" rx="2"/><rect x="208" y="370" width="20" height="9" rx="2"/><rect x="208" y="383" width="20" height="9" rx="2"/><rect x="208" y="396" width="20" height="9" rx="2"/><rect x="208" y="409" width="20" height="9" rx="2"/></g>
+    <g fill-opacity=".8"><rect x="234" y="318" width="20" height="9" rx="2"/><rect x="234" y="331" width="20" height="9" rx="2"/><rect x="234" y="344" width="20" height="9" rx="2"/><rect x="234" y="357" width="20" height="9" rx="2"/><rect x="234" y="370" width="20" height="9" rx="2"/><rect x="234" y="383" width="20" height="9" rx="2"/><rect x="234" y="396" width="20" height="9" rx="2"/><rect x="234" y="409" width="20" height="9" rx="2"/></g>
+    <g fill-opacity=".75"><rect x="260" y="318" width="20" height="9" rx="2"/><rect x="260" y="331" width="20" height="9" rx="2"/><rect x="260" y="344" width="20" height="9" rx="2"/><rect x="260" y="357" width="20" height="9" rx="2"/><rect x="260" y="370" width="20" height="9" rx="2"/><rect x="260" y="383" width="20" height="9" rx="2"/><rect x="260" y="396" width="20" height="9" rx="2"/><rect x="260" y="409" width="20" height="9" rx="2"/></g>
+    <g fill-opacity=".7"><rect x="286" y="318" width="20" height="9" rx="2"/><rect x="286" y="331" width="20" height="9" rx="2"/><rect x="286" y="344" width="20" height="9" rx="2"/><rect x="286" y="357" width="20" height="9" rx="2"/><rect x="286" y="370" width="20" height="9" rx="2"/><rect x="286" y="383" width="20" height="9" rx="2"/><rect x="286" y="396" width="20" height="9" rx="2"/><rect x="286" y="409" width="20" height="9" rx="2"/></g>
+    <g fill-opacity=".65"><rect x="312" y="318" width="20" height="9" rx="2"/><rect x="312" y="331" width="20" height="9" rx="2"/><rect x="312" y="344" width="20" height="9" rx="2"/><rect x="312" y="357" width="20" height="9" rx="2"/><rect x="312" y="370" width="20" height="9" rx="2"/><rect x="312" y="383" width="20" height="9" rx="2"/><rect x="312" y="396" width="20" height="9" rx="2"/><rect x="312" y="409" width="20" height="9" rx="2"/></g>
+    <g fill-opacity=".6"><rect x="338" y="318" width="20" height="9" rx="2"/><rect x="338" y="331" width="20" height="9" rx="2"/><rect x="338" y="344" width="20" height="9" rx="2"/><rect x="338" y="357" width="20" height="9" rx="2"/><rect x="338" y="370" width="20" height="9" rx="2"/><rect x="338" y="383" width="20" height="9" rx="2"/><rect x="338" y="396" width="20" height="9" rx="2"/><rect x="338" y="409" width="20" height="9" rx="2"/></g>
+  </g>
+  <text x="372" y="336" fill="#7b9399" font-size="10.5">lane 1</text>
+  <text x="372" y="374" fill="#7b9399" font-size="10.5">⋮</text>
+  <text x="372" y="417" fill="#7b9399" font-size="10.5">lane 59</text>
+  <text x="156" y="440" fill="#7b9399" font-size="10.5">pass 1 → pass 8: every lane gains a token in each pass</text>
+  <text x="32" y="460" fill="#b7c9cc" font-size="10.5">Reading the weights is the slow part, so 59 lanes cost little more than one.</text>
+
+  <!-- the numbers -->
+  <rect x="460" y="272" width="424" height="200" rx="12" fill="#131d23" stroke="#22333b"/>
+  <text x="476" y="298" fill="#e4eef0" font-size="13" font-weight="700">Tokens per second</text>
+  <text x="476" y="315" fill="#7b9399" font-size="10.5">Qwen3.8 27B (Q3_K_P) on an RTX 4090, measured</text>
+  <text x="476" y="346" fill="#b7c9cc" font-size="11">one lane</text>
+  <rect x="476" y="353" width="25" height="20" rx="4" fill="#7b9399"/>
+  <text x="510" y="368" fill="#e4eef0" font-size="12" font-weight="700">48</text>
+  <text x="476" y="398" fill="#b7c9cc" font-size="11">59 lanes together</text>
+  <rect x="476" y="405" width="360" height="20" rx="4" fill="#8b6cff"/>
+  <text x="828" y="420" fill="#f6f3ff" font-size="12" font-weight="700" text-anchor="end">≈ 700</text>
+  <text x="476" y="446" fill="#7b9399" font-size="10.5">One long answer: 11,426 tokens in 16.3 s.</text>
+  <text x="476" y="461" fill="#7b9399" font-size="10.5">Short answers use one lane, drafted ahead by the model's MTP head.</text>
+</svg>

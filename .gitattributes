@@ -1,0 +1,5 @@
+# shell scripts must keep Unix line ends, batch files Windows ones, whatever the checkout
+*.sh text eol=lf
+*.bat text eol=crlf
+*.gguf binary
+*.zim binary

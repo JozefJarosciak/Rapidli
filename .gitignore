@@ -1,0 +1,55 @@
+# what belongs to one user: chats, images, settings, logs, downloaded models, offline Wikipedia files
+data/
+models/
+# offline Wikipedia files (Rapidli offers the Simple English edition on its first start; Settings › Offline Wikipedia)
+kiwix/*
+!kiwix/README.md
+# the exploration that came before (large: model files and re-quantisations)
+archive/
+backup/
+# private research tooling and notes
+research/rungtree/
+# local test runs and their reports (not part of the public release)
+local-tests/
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+# built binaries: they go into a release download, not into the repository
+engine/bin/
+engine/llama/bin/
+engine/llama/lib/
+engine/llama/obj/
+engine/llama/src/
+engine/llama/*.log
+engine/llama-src/
+engine/cuda/out/
+engine/src/obj/
+engine/src/*.log
+engine/src/*.exe
+engine/src/rapidli-engine
+# backups, test output, editors
+*.bak
+*.bak-*
+*.part
+*.part.json
+tests/probes_out/
+bench/
+tools/testbench/out/
+.idea/
+.vscode/
+.claude/
+# demo-video making: procedure and Remotion project (private, not part of the public release)
+video-procedure.md
+video-tools/
+# demo recordings and their posts (large; published separately)
+video/
+# research notes, experiments and older test tools (kept locally, not part of the public release)
+research/
+engine/experiments/
+engine/src/fqspec.cpp
+engine/src/build_spec.bat
+engine/src/lanedraft_bench.cpp
+tools/testbench/
+dist/
