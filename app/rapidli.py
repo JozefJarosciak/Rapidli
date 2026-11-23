@@ -393,6 +393,61 @@ def model_list(refresh=False):
     return out
 
 
+# The answer options of the API, as the composer offers them. Lengths by the keys the page sends, and by the names it
+# shows ("long" stays the key of Longest; the page's "Long" is "detailed")
+API_SIZES = [("auto", "Auto length", "the length follows the question"), ("short", "Short", "one lane, a few sentences"),
+             ("answer", "Medium", "4 to 8 parts written side by side"), ("detailed", "Long", "parts with paragraphs, about 2,000 words"),
+             ("report", "Extra long", "about 6,000 words"), ("long", "Longest", "as long as it gets: every lane at work")]
+API_SIZE_ALIASES = {"medium": "answer", "extra_long": "report", "extra-long": "report", "extralong": "report", "longest": "long"}
+API_THINK = {"off": ("Thinking off", "answers at once, fastest"), "low": ("Think briefly", "up to about 1,000 tokens of thinking"),
+             "medium": ("Think", "up to about 3,000 tokens of thinking"), "high": ("Think hard", "up to about 8,000 tokens, the slowest"),
+             "on": ("Thinking on", "up to about 4,000 tokens of thinking"),
+             "parts": ("Think per part", "Medium and Long: each part's lane thinks about its own section, side by side; other lengths think briefly on one lane")}
+
+
+def think_levels():
+    """The thinking levels of the model loaded now, as the composer lists them: its own, with "parts" after the first."""
+    if STATE["status"] != "ready":
+        return []
+    own = list(fanmod.TPL.get("levels") or [])
+    return own[:1] + ["parts"] + own[1:] if own else ["off", "parts"]
+
+
+def api_options(b, cfg):
+    """An API request's answer options -> (the fields /api/send takes, None) or (None, what is wrong)."""
+    size = str(b.get("size") or b.get("length") or "auto").strip().lower().replace(" ", "_")
+    size = API_SIZE_ALIASES.get(size, size)
+    if size not in [k for k, _, _ in API_SIZES]:
+        return None, "size: one of " + ", ".join(k for k, _, _ in API_SIZES) + " (also medium, extra_long, longest)"
+    levels = think_levels()
+    think = b.get("think")
+    if think is None and b.get("reasoning_effort") is not None:      # (OpenAI's name for it)
+        e = str(b.get("reasoning_effort")).lower()
+        think = "off" if e in ("none", "minimal", "off") else e if e in levels else next((x for x in ("on", "medium", "low") if x in levels), "parts")
+    if think is True:
+        think = next((x for x in ("on", "medium", "low") if x in levels), "parts")
+    think = "off" if think in (None, False, "") else str(think).strip().lower()
+    if think != "off" and think not in levels:
+        return None, "think: this model offers " + ", ".join(levels or ["off"])
+    web = bool(b.get("web", b.get("search")))
+    wiki = b.get("wiki", b.get("kiwix", True)) is not False
+    first = str(b.get("first") or "wiki").lower()
+    if first not in ("wiki", "web"):
+        return None, "first: wiki or web"
+    deep = bool(b.get("deep", b.get("deep_research")))
+    if deep and not (web or (wiki and kiwix_files(cfg))):
+        return None, 'deep: needs the web ("web": true) or offline Wikipedia (installed in Rapidli: Settings > Offline Wikipedia)'
+    return {"size": size, "think": think, "search": web, "kiwix": wiki, "first": first, "deep": deep}, None
+
+
+def api_model(m):
+    cur = STATE.get("model") or {}
+    here = m["id"] == cur.get("id")
+    return {"id": m["id"], "label": label(m), "repo": m["repo"], "gb": round(m["bytes"] / 2**30, 1), "arch": m.get("arch"),
+            "context": m.get("context"), "vision": bool(m.get("mmproj")), "mtp": bool(m.get("mtp")), "source": m.get("source") or "",
+            "loaded": here and STATE["status"] == "ready", "loading": here and STATE["status"] == "loading"}
+
+
 def find_model(key):
     ms = STATE["models"] or model_list()
     for m in ms:
@@ -2234,9 +2289,10 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     # ------------------------------------------------------------------------------------------------ the API
-    # For other programs (Settings > API): POST /api/v1/ask, the OpenAI-style POST /v1/chat/completions, GET /v1/models
-    # and GET /api/v1/status. Off until switched on; with a key unless that is switched off; from other computers only
-    # with "network" on, a key always, and nothing but these paths.
+    # For other programs (Settings > API, docs/API.md): POST /api/v1/ask, the OpenAI-style POST /v1/chat/completions,
+    # GET /v1/models, GET /api/v1/status, GET /api/v1/options, GET /api/v1/models, POST /api/v1/models/load and
+    # /unload. Off until switched on; with a key unless that is switched off; from other computers only with "network"
+    # on, a key always, and nothing but these paths.
     API_PATHS = ("/v1/", "/api/v1/")
 
     def api_allowed(self):
@@ -2267,21 +2323,67 @@ class Handler(BaseHTTPRequestHandler):
         self.source = "api"
         m = STATE.get("model") or {}
         if method == "GET":
-            if p in ("/v1/models", "/api/v1/models"):
-                return self.send_json({"object": "list", "data": [{"id": m.get("id"), "object": "model", "owned_by": "rapidli"}] if m else []})
+            if p == "/v1/models":                    # (OpenAI's list: the model loaded now)
+                return self.send_json({"object": "list", "data": [{"id": m.get("id"), "object": "model", "owned_by": "rapidli"}]
+                                       if m and STATE["status"] == "ready" else []})
+            if p == "/api/v1/models":                 # every model on this PC
+                return self.send_json({"models": [api_model(x) for x in (STATE["models"] or model_list())]})
             if p == "/api/v1/status":
                 st = engine_stats() or {}
-                return self.send_json({"status": STATE["status"], "message": STATE["message"], "model": m.get("id"), "lanes": st.get("lanes"),
+                return self.send_json({"status": STATE["status"], "message": STATE["message"], "model": m.get("id"),
+                                       "label": label(m) if m else None, "lanes": st.get("lanes"), "think": think_levels(),
                                        "answers": GATE.state(), "together": settings.load()["api"].get("together")})
+            if p == "/api/v1/options":                # what an answer can be asked with now
+                kf = kiwix_files(settings.load())
+                return self.send_json({
+                    "model": m.get("id") if STATE["status"] == "ready" else None, "status": STATE["status"],
+                    "size": [{"value": k, "name": n, "what": w} for k, n, w in API_SIZES],
+                    "think": [{"value": k, "name": API_THINK.get(k, (k, ""))[0], "what": API_THINK.get(k, ("", ""))[1]} for k in think_levels()],
+                    "wiki": {"available": bool(kf), "files": [os.path.basename(f) for f in kf]}, "web": {"available": True},
+                    "first": ["wiki", "web"], "deep": {"available": True, "needs": "web or wiki"}})
             return self.api_error("no such path", 404)
         b = self.body()
+        if p == "/api/v1/models/load":
+            key = str(b.get("model") or b.get("id") or "").strip()
+            mm = find_model(key) if key else None
+            if not mm and key:
+                mm = next((x for x in (STATE["models"] or model_list()) if label(x).lower() == key.lower()), None)
+            if not mm:
+                return self.api_error("no such model: " + key[:200] + " (GET /api/v1/models lists them)", 404)
+            if STATE["status"] == "loading":
+                return self.api_error("a model is being loaded", 409)
+            refit = bool(b.get("refit"))
+            if m.get("id") == mm["id"] and STATE["status"] == "ready" and not refit:
+                return self.send_json({"status": "ready", "model": api_model(mm), "already": True})
+            print(time.strftime("%H:%M:%S"), "load requested:", mm["id"], "refit" if refit else "", "from the API", flush=True)
+            if not b.get("wait"):
+                threading.Thread(target=load_model, args=(mm, refit), daemon=True).start()
+                return self.send_json({"status": "loading", "model": api_model(mm)}, 202)
+            load_model(mm, refit)                      # (waits: this request's own thread loads it)
+            if STATE["status"] != "ready":
+                return self.api_error("the model did not load: " + str(STATE["message"])[:300], 500)
+            st = engine_stats() or {}
+            return self.send_json({"status": "ready", "model": api_model(mm), "lanes": st.get("lanes")})
+        if p == "/api/v1/models/unload":
+            if STATE["status"] == "loading":
+                return self.api_error("a model is being loaded", 409)
+            if STATE["status"] == "idle":
+                return self.send_json({"status": "idle", "already": True})
+            if not b.get("wait"):
+                threading.Thread(target=unload_model, daemon=True).start()
+                return self.send_json({"status": "unloading"}, 202)
+            unload_model()
+            return self.send_json({"status": STATE["status"]})
+        if p in ("/api/v1/ask", "/v1/chat/completions") and (STATE["status"] != "ready" or STATE["fan"] is None):
+            return self.api_error("No model is ready (" + str(STATE["message"] or STATE["status"])[:200] + "): POST /api/v1/models/load", 503)
         if p == "/api/v1/ask":
             q = str(b.get("question") or b.get("text") or "").strip()
             if not q:
                 return self.api_error("question is empty", 400)
-            body = {"chat": b.get("chat") or None, "text": q, "size": b.get("size") or "auto", "search": bool(b.get("search")),
-                    "kiwix": b.get("kiwix", True) is not False, "first": b.get("first") or "wiki", "think": b.get("think") or "off",
-                    "run": str(b.get("run") or uuid.uuid4().hex[:12])}
+            opts, bad = api_options(b, settings.load())
+            if bad:
+                return self.api_error(bad, 400)
+            body = {"chat": b.get("chat") or None, "text": q, **opts, "run": str(b.get("run") or uuid.uuid4().hex[:12])}
             if not body["chat"] and settings.load()["api"].get("folder", True):
                 ensure_api_folder()
                 body["folder"] = API_FOLDER
@@ -2341,6 +2443,9 @@ class Handler(BaseHTTPRequestHandler):
         if not conv or conv[-1]["role"] != "user" or not conv[-1]["content"].strip():
             return self.api_error("the last message must be the user's", 400)
         q = conv[-1]["content"].strip()
+        opts, bad = api_options(b, settings.load())
+        if bad:
+            return self.api_error(bad, 400)
         if system:
             q += "\n\n(Instructions for this answer: " + system[:4000] + ")"
         now = time.time()
@@ -2350,8 +2455,7 @@ class Handler(BaseHTTPRequestHandler):
             ensure_api_folder()
             c["folder"] = API_FOLDER
         save_chat(c)
-        body = {"chat": cid, "text": q, "size": b.get("size") or "auto", "search": bool(b.get("search")), "kiwix": b.get("kiwix", True) is not False,
-                "think": b.get("think") or "off", "run": cid}
+        body = {"chat": cid, "text": q, **opts, "run": cid}
         model = (STATE.get("model") or {}).get("id") or "rapidli"
         rid = "chatcmpl-" + cid
 
@@ -2510,7 +2614,7 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/folders":
             self.send_json({"folders": load_folders()})
         elif p == "/api/downloads":
-            self.send_json({"downloads": downloads.status()})
+            self.send_json({"downloads": downloads.status(), "partial": downloads.partial(settings.load()["downloads"].get("folder") or "")})
         elif p == "/api/hf/search":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             try:
@@ -2563,6 +2667,12 @@ class Handler(BaseHTTPRequestHandler):
                                         "path": m["path"], "layers": m.get("layers"), "quant": m.get("quant"), "experts": m.get("experts"), "split": m.get("split"),
                                         "loaded": m["id"] == cur and STATE["status"] == "ready", "source": m.get("source") or ""} for m in ms],
                             "places": models.LAST["places"], "folders": list((settings.load().get("models") or {}).get("folders") or [])})
+        elif p == "/api/docs/api":
+            try:
+                t = open(os.path.join(os.path.dirname(HERE), "docs", "API.md"), encoding="utf8").read()
+            except OSError:
+                t = "The documentation (docs/API.md) is not in this copy of Rapidli."
+            self.send_json({"text": t})
         elif p == "/api/chats":
             self.send_json({"chats": list_chats()})
         elif p.startswith("/api/chats/"):
@@ -2814,6 +2924,10 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self.send_json({"error": str(e)}, 400)
             return self.send_json({"id": jid})
+        if p == "/api/downloads/partial/remove":
+            ok = downloads.remove_partial(settings.load()["downloads"].get("folder") or "", b.get("path") or "")
+            print(time.strftime("%H:%M:%S"), "unfinished download deleted:" if ok else "unfinished download not found:", str(b.get("path"))[:300], flush=True)
+            return self.send_json({"ok": True} if ok else {"error": "no such unfinished download"}, 200 if ok else 404)
         if p.startswith("/api/downloads/") and p.endswith("/cancel"):
             return self.send_json({"ok": downloads.cancel(p.split("/")[3])})
         if p.startswith("/api/kiwix/"):

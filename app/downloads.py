@@ -35,14 +35,22 @@ def files(repo, token=""):
         p = it.get("path", "")
         if it.get("type") == "file" and p.lower().endswith(".gguf"):
             size = (it.get("lfs") or {}).get("size") or it.get("size") or 0
-            out.append({"file": p, "bytes": size, "gb": round(size / 2**30, 2), "mmproj": "mmproj" in p.lower()})
+            out.append({"file": p, "bytes": size, "gb": round(size / 2**30, 2), "mmproj": "mmproj" in p.lower(),
+                        "sha256": (it.get("lfs") or {}).get("oid") or ""})
     out.sort(key=lambda x: (x["mmproj"], x["file"]))
     return {"repo": repo, "files": out}
 
 
 def _run(job, token):
     url = HUB + "/" + urllib.parse.quote(job["repo"], safe="/") + "/resolve/main/" + urllib.parse.quote(job["file"])
-    fetch.download(url, job["path"], job, headers=_headers(token), connections=job.get("want", 6))
+    # the file's sha256 as Hugging Face keeps it: the download is checked against it before it is kept (a stopped
+    # download was once kept whole with nearly all of it zeros); without it, at least that it begins as a GGUF file
+    sha = ""
+    try:
+        sha = next((f["sha256"] for f in files(job["repo"], token)["files"] if f["file"] == job["file"]), "")
+    except Exception:
+        pass
+    fetch.download(url, job["path"], job, headers=_headers(token), connections=job.get("want", 6), sha256=sha or None, magic=b"GGUF")
 
 
 def start(repo, file, folder, token="", connections=6):
@@ -78,6 +86,51 @@ def cancel(jid):
 
 def status():
     return [{k: v for k, v in j.items() if k not in ("cancel", "want")} for j in sorted(_jobs.values(), key=lambda x: -x["at"])]
+
+
+def partial(folder):
+    """Downloads left unfinished (Rapidli was stopped, or one failed): the .part files in the download folder that no
+    download is working on now, with how much of each is fetched. They vanished from the list when Rapidli restarted,
+    while their .part stayed on the disk (23 Nov)."""
+    out = []
+    if not folder or not os.path.isdir(folder):
+        return out
+    busy = {os.path.normcase(j["path"]) for j in _jobs.values() if j["state"] in ("starting", "downloading", "checking")}
+    for top in sorted(os.listdir(folder)):
+        d = os.path.join(folder, top)
+        if "--" not in top or not os.path.isdir(d):
+            continue
+        for root, _, names in os.walk(d):
+            for n in names:
+                if not n.lower().endswith(".gguf.part"):
+                    continue
+                part = os.path.join(root, n)
+                path = part[:-5]
+                if os.path.normcase(path) in busy:
+                    continue
+                size, got, total = os.path.getsize(part), None, 0
+                try:                              # (pieces fetched over several connections: their notes say how much)
+                    st = json.load(open(part + ".json", encoding="utf8"))
+                    total = int(st.get("total") or 0)
+                    got = min(total, len(st.get("done") or []) * int(st.get("piece") or fetch.PIECE))
+                except Exception:
+                    pass
+                rel = os.path.relpath(path, d).replace(os.sep, "/")
+                out.append({"repo": top.replace("--", "/", 1), "file": rel, "path": path, "done": size if got is None else got,
+                            "total": total, "at": os.path.getmtime(part)})
+    return sorted(out, key=lambda x: -x["at"])
+
+
+def remove_partial(folder, path):
+    """Deletes an unfinished download's .part (and its notes). Only one that partial() lists."""
+    want = os.path.normcase(os.path.abspath(str(path)))
+    for x in partial(folder):
+        if os.path.normcase(os.path.abspath(x["path"])) == want:
+            for f in (x["path"] + ".part", x["path"] + ".part.json"):
+                if os.path.exists(f):
+                    os.remove(f)
+            return True
+    return False
 
 
 # ---------------------------------------------------------------- finding models on Hugging Face

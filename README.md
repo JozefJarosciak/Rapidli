@@ -181,7 +181,7 @@ and [docs/BUILDING.md](docs/BUILDING.md) lists every patch and what it changes.
 | **Conversations** | Kept as JSON in `data/chats`. A long conversation is read once and parked on the card, so a follow-up reads only the new turn. Edit a question, write an answer again, switch versions, put chats in folders. Deleted chats go to a trash for 30 days. |
 | **Several questions at once** | Ask in another chat while an answer is being written: side by side on the free lanes (up to 4 answers), or one after another. |
 | **Top 10** | The fastest answers by tokens a second, best second, first words, length and lanes, each with its question and settings. A click asks it again. |
-| **API** | `POST /v1/chat/completions` (OpenAI-style, streamed or not), `GET /v1/models`, `POST /api/v1/ask`, `GET /api/v1/status`. Off until switched on; with a key. |
+| **API** | Load and unload models, and ask with every choice of the composer: length, thinking, offline Wikipedia, web search, deep research. `POST /v1/chat/completions` (OpenAI-style, streamed or not) and Rapidli's own `POST /api/v1/ask`. Off until switched on; with a key. The full documentation opens in Settings › API. |
 
 **What leaves your computer:** your conversations never do. Rapidli goes online only for what you ask of it: web
 search sends the search words to the search engines (and, when you ask to see something, fetches the pictures it found); Get models and Offline Wikipedia ask huggingface.co and
@@ -199,9 +199,18 @@ curl http://127.0.0.1:11842/v1/chat/completions -H "Authorization: Bearer <key>"
   -d '{"model": "local", "messages": [{"role": "user", "content": "Write a long article about heat pumps."}]}'
 ```
 
-For tools that speak the OpenAI API, use the base URL `http://127.0.0.1:11842/v1` with any model name. Rapidli's own
-`POST /api/v1/ask {"question": "...", "size": "auto|short|answer|detailed|report|long"}` also returns the speed, the
-lanes and the route. Details: [docs/API.md](docs/API.md).
+For tools that speak the OpenAI API, use the base URL `http://127.0.0.1:11842/v1`; the model loaded now answers.
+Rapidli's own routes load and unload models and take the composer's choices for each question:
+
+```sh
+curl http://127.0.0.1:11842/api/v1/models/load -H "Authorization: Bearer <key>" -H "Content-Type: application/json" \
+  -d '{"model": "Qwen3.8-35B-A3B-IQ3_M", "wait": true}'
+curl http://127.0.0.1:11842/api/v1/ask -H "Authorization: Bearer <key>" -H "Content-Type: application/json" \
+  -d '{"question": "How do heat pumps work in cold climates?", "size": "detailed", "think": "parts", "wiki": true, "web": true, "deep": false}'
+```
+
+The answer comes with the speed, the lanes and the route. Every route, option and answer: [docs/API.md](docs/API.md),
+also shown in the app (Settings › API › Open the full API documentation).
 
 ## Tested on
 

@@ -663,6 +663,18 @@ input[type=range] { accent-color: var(--accent); width: 180px; }
 .mcard .mplace .note { flex-basis: 100%; margin: 0 !important; line-height: 1.45; }
 .mcard .mwarn { color: var(--warn); font-size: 12px; line-height: 1.45; padding: 5px 9px; border-left: 2px solid var(--warn); background: rgba(255, 180, 60, .07); border-radius: 0 6px 6px 0; }
 .mcard .ctl { display: flex; gap: 6px; align-self: start; }
+.tag.new { background: rgba(111, 211, 160, .16); color: var(--good); }
+.looknote { display: flex; align-items: center; gap: 8px; font-size: 12.5px; line-height: 1.45; color: var(--soft); background: var(--raise); border: 1px solid var(--line2); border-radius: 8px; padding: 7px 10px; margin: 0 0 10px; }
+.menu .head .looknote { margin: 2px 0 4px; }
+.looknote.news { color: var(--good); border-color: rgba(111, 211, 160, .4); }
+.looknote.bad { color: var(--bad); }
+.looknote .spin { width: 12px; height: 12px; flex: none; border: 2px solid var(--line2); border-top-color: var(--accent); border-radius: 50%; animation: lookspin .8s linear infinite; }
+@keyframes lookspin { to { transform: rotate(360deg); } }
+.tbl.apiopts { margin-top: 10px; font-size: 12.5px; }
+.tbl.apiopts td:first-child { white-space: nowrap; vertical-align: top; padding-right: 12px; }
+.apidoc { font-size: 14px; }
+.apidoc table { display: block; overflow-x: auto; font-size: 12.5px; }
+.apidoc pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .mcard { grid-template-columns: minmax(0, 1fr); } }
 .hubbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
 .hubbar .inp { flex: 1 1 200px; min-width: 0; } .hubbar select.inp { flex: 0 1 170px; }
@@ -1371,7 +1383,7 @@ function closeMenu() {
   MENU_FROM = null;
 }
 function modelTags(m) {
-  return (m.vision ? '<span class="tag v">sees images</span>' : "") + (m.mtp ? '<span class="tag d">MTP drafting</span>' : "") + (m.loaded ? '<span class="tag l">loaded</span>' : "");
+  return (S.newModels && S.newModels.has(m.id) ? '<span class="tag new">new</span>' : "") + (m.vision ? '<span class="tag v">sees images</span>' : "") + (m.mtp ? '<span class="tag d">MTP drafting</span>' : "") + (m.loaded ? '<span class="tag l">loaded</span>' : "");
 }
 
 $("gauge").onclick = () => {
@@ -1473,9 +1485,30 @@ async function eject() {
   for (let i = 0; i < 60; i++) { await status(); if (!S.status || S.status.status !== "ready") break; await new Promise(r => setTimeout(r, 500)); }
   if ($("mlist")) renderModels();
 }
-$("modelbtn").onclick = async () => {
+// "Look for new downloads" (the model menu, Settings > Models): the folders are looked through again and what changed is
+// said: the models found since, the ones no longer there, how many in all. The new ones are tagged until the page is
+// reloaded. (It had closed the menu and said nothing: no telling whether it had looked, 23 Nov.)
+async function lookForModels() {
+  const t0 = performance.now();
+  let before, after;
+  try { before = (await api("/api/models")).models; after = (await api("/api/models?refresh=1")).models; }
+  catch (e) { return { msg: "Could not look for new downloads: " + e.message, bad: true }; }
+  const had = new Set(before.map(m => m.id)), now = new Set(after.map(m => m.id));
+  const added = after.filter(m => !had.has(m.id)), gone = before.filter(m => !now.has(m.id));
+  S.newModels = S.newModels || new Set(); added.forEach(m => S.newModels.add(m.id));
+  const names = l => l.slice(0, 3).map(m => m.label).join(", ") + (l.length > 3 ? ` and ${l.length - 3} more` : "");
+  const secs = ((performance.now() - t0) / 1000).toFixed(1);
+  const msg = (added.length ? `Found ${added.length} new: ${names(added)}` : "Nothing new found")
+    + (gone.length ? `. No longer there: ${names(gone)}` : "") + ` (${after.length} model${after.length === 1 ? "" : "s"} in all, looked in ${secs} s)`;
+  return { msg, added, gone, news: added.length > 0 };
+}
+function lookNote(r) {
+  return r ? `<div class="looknote${r.busy ? " busy" : r.bad ? " bad" : r.news ? " news" : ""}">${r.busy ? '<span class="spin"></span>' : ""}${esc(r.msg)}</div>` : "";
+}
+$("modelbtn").onclick = () => openModelMenu();
+async function openModelMenu(look) {
   let j, sys; try { [j, sys] = await Promise.all([api("/api/models"), api("/api/system").catch(() => null)]); } catch (e) { return; }
-  const items = [{ head: "Models downloaded on this PC" }].concat(j.models.map(m => {
+  const items = (look ? [{ head: look.msg, html: lookNote(look) }] : []).concat([{ head: "Models downloaded on this PC" }]).concat(j.models.map(m => {
     const short = m.current && S.status && S.status.status !== "idle" && S.status.status !== "error" ? "" : ramShort(m, sys, j.models);
     return { key: m.id, label: m.label, side: m.gb + " GB", tags: modelTags(m),
       sub: `${m.repo} · ${m.arch}${m.context ? " · reads " + fmtK(m.context) : ""}` + (short ? " · " + short : ""), on: m.current && S.status.status !== "idle",
@@ -1483,7 +1516,12 @@ $("modelbtn").onclick = async () => {
   }));
   items.push({ sep: 1 }, { key: "__refresh", label: "Look for new downloads" }, { key: "__unload", label: "Unload the model", sub: "frees the graphics card" }, { key: "__set", label: "Models and downloads…" });
   openMenu($("modelbtn"), items, async it => {
-    if (it.key === "__refresh") { await api("/api/models?refresh=1").catch(() => {}); return $("modelbtn").click(); }
+    if (it.key === "__refresh") {
+      // the menu stays open: it says it is looking, then what it found
+      setTimeout(() => openModelMenu({ msg: "Looking for new downloads…", busy: true }), 0);
+      const r = await lookForModels();
+      return openModelMenu(r);
+    }
     if (it.key === "__unload") return eject();
     if (it.key === "__set") return openSettings("models");
     if (it.on) {
@@ -3548,25 +3586,81 @@ function renderApi() {
     ${togetherField("a-tog", a, "Several requests at once", "Side by side: requests are written at once, on the lanes that are free. One after another: each waits for the one before it (a streamed request is told its place in line).")}
     <div class="field"><label>Keep the API's chats</label><div class="help">Its conversations appear in the chat list, in a folder called API. Off: they are kept in the list without a folder.</div><div class="ctl">${sw("a-folder", a.folder !== false)}</div></div>
     <div class="field"><label>Other computers</label><div class="help">Open the API (only the API, never the app itself) to other computers on your network, with the key. Takes effect when Rapidli is started again; the firewall may need to let port 11842 through (Windows asks; on Linux, ufw or firewalld).</div><div class="ctl">${sw("a-net", !!a.network)}</div></div>
-    <div class="field stack"><label>Ask a question</label><div class="help"><code>size</code>: auto, short, answer, detailed, report or long. <code>chat</code>: the id of an earlier answer's chat, to go on in that conversation. <code>"stream": true</code> gives the app's own events as they come.</div>
+    <div class="field stack"><label>Documentation</label><div class="help">Every route, field and answer, with examples: loading and unloading models, the length, thinking, offline Wikipedia, web search and deep research of each question.</div>
+      <div class="ctl"><button class="btn pri" id="a-docs">Open the full API documentation</button></div></div>
+    <div class="field stack"><label>Load a model</label><div class="help"><code>GET /api/v1/models</code> lists the models on this PC; <code>model</code> is an <code>id</code> or a <code>label</code> from it. <code>"wait": true</code> answers once the model is ready (a big model can take minutes); without it the answer comes at once and <code>GET /api/v1/status</code> tells when it is ready. <code>POST /api/v1/models/unload</code> frees the graphics card.</div>
+<pre class="apiex">curl ${esc(base)}/api/v1/models/load${esc(auth)} \\
+  -H "Content-Type: application/json" \\
+  -d '{"model": "${esc((S.status && S.status.model && S.status.model.label) || "Qwen3.8-35B-A3B-IQ3_M")}", "wait": true}'
+
+→ {"status": "ready", "model": {"id": "…", "label": "…", "loaded": true, …}, "lanes": 115}</pre></div>
+    <div class="field stack"><label>Ask a question</label><div class="help">Each question is asked with the same choices as the composer. <code>GET /api/v1/options</code> lists what can be chosen now (the thinking levels depend on the model loaded).</div>
 <pre class="apiex">curl ${esc(base)}/api/v1/ask${esc(auth)} \\
   -H "Content-Type: application/json" \\
-  -d '{"question": "Explain how a heat pump works.", "size": "auto"}'
+  -d '{"question": "How do heat pumps work in cold climates?", "size": "detailed",
+       "think": "parts", "wiki": true, "web": true, "first": "wiki", "deep": false}'
 
-→ {"chat": "…", "answer": "…", "stats": {"route": "fan", "seconds": 4.6, "tokens": 620, "tokens_per_second": 135, "lanes": 7}}</pre></div>
-    <div class="field stack"><label>OpenAI-style</label><div class="help">For tools that speak the OpenAI chat API: base URL <code>${esc(base)}/v1</code>, any model name. The earlier messages are the conversation; a system message is followed as instructions. Streamed, a one-lane answer comes word by word, a many-lane answer at its end.</div>
+→ {"chat": "…", "answer": "…", "stats": {"route": "fan", "seconds": 9.1, "tokens": 3140, "tokens_per_second": 1480, "lanes": 14}, "search": […]}</pre>
+      <table class="tbl apiopts"><tbody>
+        <tr><td><code>size</code></td><td><code>auto</code> (default) · <code>short</code> · <code>answer</code> (Medium) · <code>detailed</code> (Long) · <code>report</code> (Extra long) · <code>long</code> (Longest). Also <code>medium</code>, <code>extra_long</code>, <code>longest</code>.</td></tr>
+        <tr><td><code>think</code></td><td><code>off</code> (default) · <code>parts</code> (think per part) · the model's own levels: <code>low</code>, <code>medium</code>, <code>high</code> or <code>on</code>. <code>true</code> picks the model's usual level. The OpenAI route also reads <code>reasoning_effort</code>.</td></tr>
+        <tr><td><code>wiki</code></td><td>offline Wikipedia, when installed: on unless <code>false</code></td></tr>
+        <tr><td><code>web</code></td><td>web search with cited sources: off unless <code>true</code></td></tr>
+        <tr><td><code>first</code></td><td><code>wiki</code> (default) or <code>web</code>: which is asked first when both are on</td></tr>
+        <tr><td><code>deep</code></td><td>deep research: several rounds of searching, answered as a report. Needs <code>web</code> or offline Wikipedia</td></tr>
+        <tr><td><code>chat</code></td><td>the <code>chat</code> of an earlier answer, to go on in that conversation</td></tr>
+        <tr><td><code>stream</code></td><td><code>true</code>: the app's own events as they come</td></tr>
+      </tbody></table></div>
+    <div class="field stack"><label>OpenAI-style</label><div class="help">For tools that speak the OpenAI chat API: base URL <code>${esc(base)}/v1</code>; the model loaded now answers, whatever model name is sent. The earlier messages are the conversation; a system message is followed as instructions. The options above can be added to the request. Streamed, a one-lane answer comes word by word, a many-lane answer at its end.</div>
 <pre class="apiex">curl ${esc(base)}/v1/chat/completions${esc(auth)} \\
   -H "Content-Type: application/json" \\
-  -d '{"model": "rapidli", "messages": [{"role": "user", "content": "Give me 5 tips for public speaking."}]}'</pre></div>
-    <div class="field stack"><label>Also</label><div class="help"><code>GET /v1/models</code> the model loaded now · <code>GET /api/v1/status</code> the model, the lanes, and the answers being written or waiting.</div></div>`;
+  -d '{"model": "rapidli", "messages": [{"role": "user", "content": "Give me 5 tips for public speaking."}], "size": "answer"}'</pre></div>
+    <div class="field stack"><label>Also</label><div class="help"><code>GET /api/v1/status</code> the model, the lanes, its thinking levels, and the answers being written or waiting · <code>GET /v1/models</code> the model loaded now, as OpenAI lists models.</div></div>`;
   const toggle = (id, key2, after) => { const b = $(id); b.onclick = async () => { const v = b.getAttribute("aria-checked") !== "true"; b.setAttribute("aria-checked", String(v)); await saveSet("api", key2, v); if (after) after(); }; };
   toggle("a-on", "enabled", () => renderApi());
   toggle("a-key", "require_key", () => renderApi());
   toggle("a-folder", "folder");
   toggle("a-net", "network", () => toast("Takes effect when Rapidli is started again"));
   bindTogether("a-tog", "api");
+  $("a-docs").onclick = renderApiDocs;
   if ($("a-copy")) $("a-copy").onclick = () => { navigator.clipboard.writeText(key).then(() => toast("Key copied"), () => toast("Could not copy: select it and copy")); };
   $("a-new").onclick = async () => { const b = $("a-new"); if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "Click again: the old key stops"; setTimeout(() => { delete b.dataset.sure; b.textContent = "New key"; }, 3000); return; } await saveSet("api", "key", "new"); renderApi(); };
+}
+// a Markdown file of the docs as an answer is shown: its lines wrapped by hand are joined into paragraphs (an answer's
+// single line breaks are kept), and its links to its own headings ([Models](#models)) work; links to other files
+// are left as their text
+function docHTML(src) {
+  const out = []; let fence = false;
+  for (const line of src.replace(/\r/g, "").split("\n")) {
+    if (/^\s*```/.test(line)) fence = !fence;
+    const prev = out.length ? out[out.length - 1] : "";
+    const block = s => /^\s*($|#|[-*+] |\d+\. |\||```|>)/.test(s);
+    if (!fence && !/^\s*```/.test(line) && !block(line) && prev && !block(prev) && !/^\s*```/.test(prev) && !/^ {2,}\S/.test(line)) out[out.length - 1] = prev + " " + line.trim();
+    else if (!fence && !/^\s*```/.test(line) && /^ {2,}\S/.test(line) && prev && /^\s*[-*+] /.test(prev)) out[out.length - 1] = prev + " " + line.trim();
+    else out.push(line);
+  }
+  const marks = [];
+  const text = out.join("\n").replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, t, href) => {
+    if (!href.startsWith("#")) return t;
+    marks.push([href.slice(1), t]); return "⟦" + (marks.length - 1) + "⟧";
+  });
+  return md(text).replace(/⟦(\d+)⟧/g, (m, i) => `<a href="#${esc(marks[+i][0])}">${esc(marks[+i][1])}</a>`);
+}
+// Settings > API > the full documentation: docs/API.md, read from the app and shown as an answer is
+async function renderApiDocs() {
+  const body = $("setbody");
+  body.innerHTML = `<div class="row" style="margin:0 0 12px"><button class="btn" id="a-back">‹ API settings</button></div><div class="content apidoc" id="a-doc"><p class="note">Reading…</p></div>`;
+  $("a-back").onclick = renderApi;
+  body.scrollTop = 0;
+  try { const j = await api("/api/docs/api"); $("a-doc").innerHTML = docHTML(j.text || ""); }
+  catch (e) { $("a-doc").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  // (the documentation's links within itself scroll to their heading)
+  $("a-doc").querySelectorAll('a[href^="#"]').forEach(a => a.onclick = ev => {
+    ev.preventDefault();
+    const want = decodeURIComponent(a.getAttribute("href").slice(1));
+    const h = [...$("a-doc").querySelectorAll("h1,h2,h3,h4")].find(x => x.textContent.trim().toLowerCase().replace(/[^\w\s-]/g, "").replace(/\s+/g, "-") === want);
+    if (h) h.scrollIntoView({ block: "start", behavior: "smooth" });
+  });
 }
 // how several questions at a time are answered (Settings > Chat, and the same for the API)
 function togetherField(id, c, label, help) {
@@ -3733,11 +3827,17 @@ function placeOf(gbAll, sp) {
   const tag = ok ? '<span class="tag d">experts in PC memory</span>' : tight ? '<span class="tag d">only just</span>' : '<span class="tag">too large</span>';
   return { kind: ok ? "ram" : tight ? "tight" : "big", html: tag + bar + `<div class="note" style="margin:3px 0 0;font-size:11.5px">${words}${ok || tight ? ". Slower than a model on the card: the experts it uses most are kept on the card, the processor computes others." : ""}</div>` };
 }
-async function renderModels() {
+async function renderModels(look) {
   const body = $("setbody");
   body.innerHTML = head("Models", "The chat models already on this computer. Rapidli looks for GGUF files each time it starts: in the Hugging Face cache (where Unsloth Studio and many other apps download), in the folders of LM Studio, Ollama, Jan, GPT4All and llama.cpp, in its own models folder, and in any folder you add below.") + '<div class="row" style="margin:0 0 14px"><button class="btn" id="m-refresh">Look for new downloads</button><button class="btn" id="m-unload">Unload the model</button><button class="btn" id="m-dl">Download a model…</button></div><div class="mlist" id="mlist"><p class="note">Reading…</p></div>';
   $("setclose").onclick = closeSettings;
-  $("m-refresh").onclick = async () => { $("mlist").innerHTML = '<p class="note">Looking…</p>'; await api("/api/models?refresh=1").catch(() => {}); renderModels(); };
+  $("m-refresh").onclick = async () => {
+    const b = $("m-refresh"); b.disabled = true; b.textContent = "Looking…";
+    $("mlist").insertAdjacentHTML("beforebegin", lookNote({ msg: "Looking for new downloads in every folder…", busy: true }).replace('class="looknote', 'id="m-look" class="looknote'));
+    const r = await lookForModels();
+    renderModels(r);
+  };
+  if (look) $("mlist").insertAdjacentHTML("beforebegin", lookNote(look));
   $("m-unload").onclick = eject;
   $("m-dl").onclick = () => { SET.tab = "downloads"; openSettings("downloads"); };
   let j, sys; try { [j, sys] = await Promise.all([api("/api/models"), api("/api/system").catch(() => null), status()]); } catch (e) { $("mlist").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
@@ -3901,13 +4001,29 @@ async function renderDownloads() {
   const jobs = async () => {
     if (!$("d-jobs")) return;
     let j; try { j = await api("/api/downloads"); } catch (e) { return; }
-    if (!j.downloads.length) { $("d-jobs").innerHTML = '<p class="note">None yet.</p>'; return; }
+    const part = j.partial || [];
+    if (!j.downloads.length && !part.length) { $("d-jobs").innerHTML = '<p class="note">None yet.</p>'; return; }
+    const gb = n => (n / 2 ** 30).toFixed(2);
     $("d-jobs").innerHTML = j.downloads.map(x => {
-      const pct = x.total ? x.done / x.total * 100 : 0;
-      const what = x.state === "downloading" ? `${pct.toFixed(1)}% · ${(x.done / 2 ** 30).toFixed(2)} of ${(x.total / 2 ** 30).toFixed(2)} GB · ${x.mb_s} MB/s${x.connections > 1 ? ` · ${x.connections} connections` : ""}` : x.state === "done" ? "done: it is in the model list" : x.state === "error" ? "failed: " + x.error : x.state;
-      return `<div class="dl"><div class="top2"><span title="${esc(x.path)}">${esc(x.repo)} / ${esc(x.file)}</span>${x.state === "downloading" || x.state === "starting" ? `<button class="btn sm danger" data-c="${x.id}">Cancel</button>` : ""}</div><div class="note" style="margin:4px 0 0">${esc(what)}</div>${x.state === "downloading" ? `<div class="prog"><i style="width:${pct.toFixed(1)}%"></i></div>` : ""}</div>`;
-    }).join("");
+      const pct = x.total ? x.done / x.total * 100 : 0, live = x.state === "downloading" || x.state === "starting" || x.state === "checking";
+      const what = x.state === "downloading" ? `${pct.toFixed(1)}% · ${gb(x.done)} of ${gb(x.total)} GB · ${x.mb_s} MB/s${x.connections > 1 ? ` · ${x.connections} connections` : ""}`
+        : x.state === "checking" ? "Downloaded. Checking the file against Hugging Face's checksum (a minute or two for a big model)…"
+        : x.state === "starting" ? "Starting…" : x.state === "done" ? "done: it is in the model list" : x.state === "error" ? "failed: " + x.error
+        : x.state === "cancelled" ? "cancelled: what was fetched is kept, to go on later (below)" : x.state;
+      return `<div class="dl"><div class="top2"><span title="${esc(x.path)}">${esc(x.repo)} / ${esc(x.file)}</span>${live ? `<button class="btn sm danger" data-c="${x.id}">Cancel</button>` : ""}</div><div class="note" style="margin:4px 0 0">${esc(what)}</div>${x.state === "downloading" ? `<div class="prog"><i style="width:${pct.toFixed(1)}%"></i></div>` : ""}</div>`;
+    }).join("")
+      // unfinished downloads (Rapidli stopped, or cancelled): go on from where they stopped, or delete what was fetched
+      + (part.length ? `<div class="lbl2" style="margin:12px 0 6px">Unfinished</div>` + part.map(x => {
+        const pct = x.total ? x.done / x.total * 100 : 0;
+        return `<div class="dl"><div class="top2"><span title="${esc(x.path)}">${esc(x.repo)} / ${esc(x.file)}</span><span class="row" style="gap:6px"><button class="btn sm pri" data-resume="${esc(x.repo)}" data-file="${esc(x.file)}">Resume</button><button class="btn sm danger" data-drop="${esc(x.path)}">Delete</button></span></div>`
+          + `<div class="note" style="margin:4px 0 0">${x.total ? `${pct.toFixed(1)}% · ${gb(x.done)} of ${gb(x.total)} GB fetched` : `${gb(x.done)} GB fetched`}: stopped before it was whole</div>${x.total ? `<div class="prog"><i style="width:${pct.toFixed(1)}%"></i></div>` : ""}</div>`;
+      }).join("") : "");
     $("d-jobs").querySelectorAll("[data-c]").forEach(b => b.onclick = () => api("/api/downloads/" + b.dataset.c + "/cancel", {}).then(jobs));
+    $("d-jobs").querySelectorAll("[data-resume]").forEach(b => b.onclick = () => { b.disabled = true; api("/api/downloads", { repo: b.dataset.resume, file: b.dataset.file }).then(jobs, e => toast(e.message)); });
+    $("d-jobs").querySelectorAll("[data-drop]").forEach(b => b.onclick = () => {
+      if (!confirm("Delete this unfinished download?\n\n" + b.dataset.drop + ".part\n\nWhat was fetched is deleted for good; the download would start from the beginning.")) return;
+      api("/api/downloads/partial/remove", { path: b.dataset.drop }).then(jobs, e => toast(e.message));
+    });
     if (j.downloads.some(x => x.state === "done" && !x.seen)) { j.downloads.forEach(x => x.seen = true); api("/api/models?refresh=1").catch(() => {}); }
   };
   jobs(); SET.dlTimer = setInterval(jobs, 1000);

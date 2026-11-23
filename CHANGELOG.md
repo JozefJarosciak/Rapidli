@@ -1,5 +1,17 @@
 # Changelog
 
+## API: models and answer options (23 Nov 2026)
+
+- `GET /api/v1/models` lists every model on the PC; `POST /api/v1/models/load` (`model`: id or label, `wait`,
+  `refit`) and `POST /api/v1/models/unload` load and unload them.
+- `/api/v1/ask` and `/v1/chat/completions` take the composer's choices: `size` (also by the names the app shows),
+  `think` (the model's levels and per-part thinking; `reasoning_effort` on the OpenAI route), `wiki`, `web`,
+  `first` and `deep`. A wrong value is refused with the values that can be given; no model ready answers 503.
+- `GET /api/v1/options` says what can be chosen now; `/api/v1/status` adds the label and the thinking levels.
+- docs/API.md rewritten for other programs, with examples; Settings › API opens it in the app.
+- No model loaded: the engine's port is tried every 2 s at most, not on every poll (the polls had piled up).
+- Settings › Models: an unloaded model shows Load and Delete once the engine has stopped; the cards' text wraps.
+
 ## Eject and delete models (23 Nov 2026)
 
 - Eject on the loaded model's row in the model menu unloads it and frees the graphics card.

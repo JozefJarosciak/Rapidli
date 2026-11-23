@@ -91,8 +91,9 @@ def _pieces(url, path, job, headers, total, connections, mirrors=()):
         if st.get("total") == total and st.get("piece") == PIECE and os.path.getsize(part) == total:
             done = {int(i) for i in st.get("done", []) if 0 <= int(i) < n}
     except Exception:
-        # a .part without notes is what one connection wrote from the start: its whole pieces are kept
-        if os.path.exists(part) and not os.path.exists(note):
+        # a .part without notes is what one connection wrote from the start: its whole pieces are kept. Not one of full
+        # length: that is what this function makes before any piece is fetched (it is started over)
+        if os.path.exists(part) and not os.path.exists(note) and os.path.getsize(part) < total:
             done = set(range(min(n, os.path.getsize(part) // PIECE)))
     with open(part, "r+b" if os.path.exists(part) else "wb") as f:
         f.truncate(total)                         # its full length now: every piece has its place
@@ -105,6 +106,7 @@ def _pieces(url, path, job, headers, total, connections, mirrors=()):
         with open(note + ".tmp", "w", encoding="utf8") as f:
             json.dump({"total": total, "piece": PIECE, "done": sorted(done)}, f)
         os.replace(note + ".tmp", note)
+    save()                                        # (at once: a full-length .part is never without its notes)
 
     def work():
         with open(part, "r+b") as f:
@@ -195,11 +197,16 @@ def _pieces(url, path, job, headers, total, connections, mirrors=()):
         return False
     if errors or len(done) < n:
         raise IOError((errors[0] if errors else "some parts are missing") + " (it goes on from where it stopped when started again)")
-    try:
-        os.remove(note)
-    except OSError:
-        pass
-    return True
+    return True                                   # (the notes stay until the file is kept: download() removes them)
+
+
+def _drop(*paths):
+    """removes files that may be there (a .part with its notes)"""
+    for f in paths + tuple(x + ".json" for x in paths if x.endswith(".part")):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
 
 
 def sha256_of(path, job=None):
@@ -215,8 +222,9 @@ def sha256_of(path, job=None):
     return h.hexdigest()
 
 
-def download(url, path, job, headers=None, connections=6, sha256=None, mirrors=None):
-    """Fetches url into path (see the module's notes). Never raises: the outcome is job["state"]."""
+def download(url, path, job, headers=None, connections=6, sha256=None, mirrors=None, magic=None):
+    """Fetches url into path (see the module's notes). Never raises: the outcome is job["state"]. magic: the bytes the
+    file begins with, checked when there is no sha256."""
     part = path + ".part"
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -245,9 +253,16 @@ def download(url, path, job, headers=None, connections=6, sha256=None, mirrors=N
                 job["state"] = "cancelled"
                 return
             if got != sha256.lower():
-                os.remove(part)
+                _drop(part)
                 raise IOError("the downloaded file does not match its checksum; it was removed, start the download again")
+        elif magic:
+            with open(part, "rb") as f:
+                head = f.read(len(magic))
+            if head != magic:
+                _drop(part)
+                raise IOError("the downloaded file is damaged (it does not begin as it should); it was removed, start the download again")
         os.replace(part, path)
+        _drop(part + ".json")
         job.update(state="done", mb_s=0)
     except Exception as e:
         job.update(state="error", error=str(e)[:300])

@@ -151,6 +151,22 @@ try:
     check("with mirrors the file is whole", job.get("state") == "done" and sha(p) == WHOLE, job)
     check("the mirrors and the first address share the work", n1 >= 2 and n2 >= 2 and len(seen_main) >= 2, (n1, n2, len(seen_main) - 1))
     check("nothing was kept from the mirror with another file", job.get("state") == "done" and job.get("mirrors") == 4, (len(seen_other), job.get("mirrors")))
+
+    # 7. a full-length part without notes (a download stopped before its first notes were written): it is not taken
+    # for a finished one. Such a file was kept whole with nearly all of it zeros (Inkling-2-Mini, 23 Nov)
+    url, seen, _ = server()
+    p, job = os.path.join(tmp, "g.bin"), {}
+    with open(p + ".part", "wb") as f:
+        f.truncate(SIZE)
+    fetch.download(url, p, job, connections=3)
+    got = [r for r in seen if r[1] - r[0] > 0]
+    check("a full-length part without notes is fetched again", job.get("state") == "done" and len(got) == 9 and sha(p) == WHOLE, (job.get("state"), len(got)))
+
+    # 8. no checksum: a file that does not begin as it should is not kept
+    url, seen, _ = server()
+    p, job = os.path.join(tmp, "h.bin"), {}
+    fetch.download(url, p, job, connections=3, magic=b"GGUF")
+    check("a file that does not begin as it should is not kept", job.get("state") == "error" and "damaged" in job.get("error", "") and not os.path.exists(p) and not os.path.exists(p + ".part") and not os.path.exists(p + ".part.json"), job)
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 print("ALL PASS" if not FAILED else f"{len(FAILED)} FAILED: " + "; ".join(FAILED))
