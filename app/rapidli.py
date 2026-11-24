@@ -655,6 +655,9 @@ def load_model(m, fresh=False, why=None):
                         ld["expected"] = max(ld["expected"], el) + secs
 
                 eng.stop(STATE["engine_port"])
+                # (from here the engine on this port is ours: fit() starts it. Set only after fit(), a stop during a
+                # load left the engine running and holding the card, a fresh Linux install found, 24 Nov)
+                STATE["started_engine"] = True
                 kind, think = set_template_for(m)
                 # (a warning about the PC's memory is kept for the rest of the load: the next message followed it at once,
                 # and the page, asking every 600 ms, hardly ever saw it, a review found, 21 Nov)
@@ -665,7 +668,6 @@ def load_model(m, fresh=False, why=None):
                     say(f"loading {label(m)} with its vision projector")
                 res = fit.fit(m["path"], port=STATE["engine_port"], say=say, fresh=fresh, ctx_max=m.get("context") or 262144,
                               lanes_fixed=lanes_fixed, note=note, **how)
-                STATE["started_engine"] = True
                 fn = Fan(STATE["engine_port"])
                 say("reading the layouts")
                 try:                              # at most 30 s per step: the model is usable without it

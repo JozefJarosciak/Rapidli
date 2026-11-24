@@ -92,7 +92,7 @@ page. Everything runs on your computer.
 | **System memory (RAM)** | Enough for the app (a few GB). For a **mixture-of-experts model larger than the card**, the experts that don't fit stay in RAM, so you need free RAM of roughly the model size minus the part on the card: the 61.9 GB model above ran with 64 GB. A **dense** model larger than the card is not supported (it is refused with "does not fit"). |
 | **Operating system** | Windows 11 (tested; Windows 10 should work) or Linux (64-bit; built and started under WSL 2 only, untested on a native install). macOS: [help wanted](#macos-help-wanted). |
 | **Software** | The NVIDIA driver, the CUDA toolkit (13 on Windows; 12.x or 13 on Linux) and Python 3.10 or newer. |
-| **Models** | Any GGUF chat model that llama.cpp (Unsloth's fork) loads. Measured families include Qwen3.6/3.8 (dense and mixture of experts, with MTP drafting), Ternary-Bonsai, and Gemma 4 / Nemotron. |
+| **Models** | Any GGUF chat model that llama.cpp (Unsloth's fork) loads. Measured families include Qwen3.6/3.8 (dense and mixture of experts, with MTP drafting), Inkling 2 Mini (Thinking Machines Lab), Ternary-Bonsai, and Gemma 4 / Nemotron. |
 
 ## Install
 
@@ -103,7 +103,7 @@ page. Everything runs on your computer.
 2. Install **[Python 3.10 or newer](https://www.python.org/downloads/)** (keep "py launcher" ticked).
 3. Get Rapidli: `git clone https://github.com/JozefJarosciak/Rapidli.git`, or download the source ZIP from this page.
 4. From the **[Releases](https://github.com/JozefJarosciak/Rapidli/releases)** page, download
-   `rapidli-engine-windows-x64.zip` and unzip it into `engine\bin` (so that `engine\bin\rapidli-engine.exe` exists).
+   `rapidli-engine-windows-x64.zip` and unzip it into a new folder `engine\bin` (so that `engine\bin\rapidli-engine.exe` exists).
    It has native code for RTX 20, 30, 40 and 50 cards (only an RTX 4090 has been tested).
 5. Optional but recommended: `py -m pip install -r requirements.txt` (offline Wikipedia, better web search, PDF
    text; without them Rapidli runs and falls back).
@@ -127,7 +127,7 @@ sudo apt install git python3 python3-venv
 # 3. Rapidli, and the engine from the Releases page unpacked into engine/bin
 git clone https://github.com/JozefJarosciak/Rapidli.git
 cd Rapidli
-tar -xzf ~/Downloads/rapidli-engine-linux-x64.tar.gz -C engine/bin
+mkdir -p engine/bin && tar -xzf ~/Downloads/rapidli-engine-linux-x64.tar.gz -C engine/bin
 # 4. optional packages, in a virtual environment
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # 5. start (stop with ./stop.sh)
@@ -160,8 +160,9 @@ and [docs/BUILDING.md](docs/BUILDING.md) lists every patch and what it changes.
 2. **A model.** Rapidli looks for GGUF chat models in the Hugging Face cache, in the folders of LM Studio, Ollama,
    Jan, GPT4All and llama.cpp, in `models` and Downloads folders, and in any folder you add (Settings › Models). With
    none, open **Settings › Models › Get models**, pick one marked "fits", and download it.
-3. **Choose it** with the model button in the composer. The first load fits its lanes (about half a minute); later
-   loads start from what was measured.
+3. **The model loads** at start: the one used last, or the first time one that was found. Choose another with the
+   model button in the composer. The first load fits its lanes (about half a minute); later loads start from what
+   was measured.
 4. **Ask.** Long answers ("write a long article about…", "a report on…") use the most lanes. Pick the length per
    message (Auto, Short, Medium, Long, Extra long, Longest). Open **The engine right now** to watch every lane, the live
    tokens a second and the card's memory.
@@ -236,6 +237,7 @@ All measurements were taken on one machine:
 | Ternary-Bonsai-2-2B Q2_0 | 0.5 GB | on the card, 248 lanes | a Longest article: 5,273 tokens in 6.9 s on 65 lanes, **peak 5,024 tok/s** |
 | Ternary-Bonsai-2-27B Q2_0 | 7.1 GB | on the card, 156 lanes | the engine alone: 1 lane 90 tok/s, 32 lanes 1,310, 128 lanes 2,330, 156 lanes 2,400; Longest articles 6,400 to 17,500 words in 16.8 to 20.5 s |
 | Qwen3.8-27B UD-Q4_K_M (dense, MTP head) | 15.3 GB | on the card, 72 lanes | one lane 86 to 90 tok/s with MTP drafting (45 to 51 without); a long report 911 to 915 tok/s |
+| Inkling-2-Mini UD-Q2_K_XL (mixture of experts, looped layers) | 9.1 GB | on the card, 108 lanes at an 8k context (59 at 32k) | a Longest article: 7,077 tokens in 16.7 s on 83 lanes, **peak 1,116 tok/s**; the lanes alone 1,340 tok/s |
 | Qwen3.8-Flash-Next Q2_0 (mixture of experts) | **61.9 GB** | 3.4 GB + a 12.5 GB expert cache on the card, the rest in RAM, 32 lanes | a 32-function Python module in 22.7 s (32/32 pass), **peak 474 tok/s**; long articles 186 to 201 tok/s steady |
 | NVIDIA-Nemotron-3.5-Bolt-E4B BF16 (Gemma 4) | 14.0 GB | on the card | 250 lanes fitted |
 
@@ -264,8 +266,8 @@ More in [docs/RESULTS.md](docs/RESULTS.md); how each speed-up was found, includi
   close them and press Fit again.
 - **No model found:** add the folder your models are in under Settings › Models, or use Settings › Models › Get models.
 - **Rapidli does not start:** see `data/logs/rapidli.err.log` and `data/logs/engine-11832.log`. On Windows, check that
-  `engine\bin\rapidli-engine.exe` exists and the CUDA Toolkit 13 is installed. On Linux, "the engine is not built"
-  means `engine/build-linux.sh` has not been run.
+  `engine\bin\rapidli-engine.exe` exists and the CUDA Toolkit 13 is installed. On Linux, "the engine is not installed"
+  means the release archive is not unpacked into `engine/bin` (or `engine/build-linux.sh` has not been run).
 - **Ports:** Rapidli uses 11842 (the app) and 11832 (its engine), both on 127.0.0.1.
 
 ## Contributing

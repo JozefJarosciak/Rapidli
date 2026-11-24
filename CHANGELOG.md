@@ -1,5 +1,13 @@
 # Changelog
 
+## Fixes from a fresh install (24 Nov 2026)
+
+- Stopping Rapidli while a model loaded (stop.sh / stop.bat, or the app's shutdown) left the engine running and
+  holding the graphics card: the app counted the engine as its own only once the load had finished. It does so from
+  the start of the load now.
+- README: the Linux install creates `engine/bin` before unpacking the engine into it (a fresh clone has no such
+  folder, and `tar -C` stopped); Inkling-2-Mini is in the measured models; the first start loads a model by itself.
+
 ## Settings: larger, and the models as a table (24 Nov 2026)
 
 - Settings opens over nearly the whole window (up to 1,680 px wide, 96% of its height) instead of a 1,040 x 780 box.
