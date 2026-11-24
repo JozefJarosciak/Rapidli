@@ -1,5 +1,100 @@
 # Changelog
 
+## Settings: larger, and the models as a table (24 Nov 2026)
+
+- Settings opens over nearly the whole window (up to 1,680 px wide, 96% of its height) instead of a 1,040 x 780 box.
+- Settings > Models is one box: a toolbar (find a model by name, quant or architecture; show only those that see
+  images, draft with MTP, are mixtures of experts or fit the card; the count and total size; Look for new downloads;
+  Download a model) over a table that sorts by any column - model, abilities, quant, size, your card, context,
+  layers, source - and keeps the order and filters between visits. The loaded model is always the first row, marked,
+  with its lanes and context and its own Fit again and Unload; the separate "Unload the model" button is gone. Where a
+  large model would go (card, PC memory, disk) is the cell's tooltip. The folders Rapidli looks in are a box of their
+  own below, the empty ones dimmed.
+- Models and Get models are one tab: Settings > Models has "On this PC" and "Get models" under its heading, and a
+  download going on shows as one line on "On this PC". What opened the old tab (the model menu's "Models and
+  downloads…") opens Get models there.
+- Get models, laid out again: a search bar; labelled filters - Size, Abilities (sees images, MTP drafting, mixture of
+  experts), Fits my card, Publisher (a list instead of a row of chips) - with Clear filters; each result with its
+  parameters, about how large it is at Q4_K_M and whether that fits, and its abilities; the model opened beside them,
+  both scrolling on their own; the downloads and the download settings (folder, token) in boxes below. The filters
+  are kept between visits.
+- Get models filters by what Hugging Face read from each repository's GGUF (its parameters, architecture and context,
+  asked with the search): "Inkling-2-Mini" says no size in its name and had been left out by Size and Fits my card.
+  MTP is "MTP" when the name says it (or a tag does, on an architecture with MTP heads) and "MTP?" for an
+  architecture whose files usually keep the head; Inkling 2 has none (its "mtp" tag is about a DSpark drafter).
+  Opening a model reads one file's header (a few MB, kept in `data/hf-abilities.json`) and says for sure: MTP drafting
+  or no MTP head, mixture of experts, sees images, the context. A repository with both kinds of file is read from an
+  MTP one, and its MTP files are tagged. The largest file that fits the card is marked "best fit".
+- Fixed: the list changed by itself. Each redraw opened its first result, whose file then decided the MTP filter -
+  with MTP drafting on, clicking Fits my card and back left none of the earlier results. Now only a new search opens
+  a result, and what a file says marks its row without reordering or dropping rows. The file read for a repository's
+  abilities is never its drafter (the smallest file of Inkling repositories, which said "reads up to 1024k · dflash").
+- Drafters beside a model (`dspark-…gguf`, architecture dflash) are no longer listed as chat models on this PC, and in
+  Get models they are tagged "drafter".
+
+## Better Long articles: written without offline Wikipedia's text (24 Nov 2026)
+
+- A Long answer that explains something (an article, how something works, why) is no longer handed offline
+  Wikipedia's text. Its writers paraphrased the Simple English articles ("stitched-together encyclopedia
+  definitions", a reviewer wrote) and the outline shrank to what those articles covered: a history of aviation planned
+  from them stopped at the Wright brothers. Blind review, 15 Long articles a version (Inkling-2-Mini Q2_K_XL,
+  Qwen3.8-35B-A3B, Ternary-Bonsai-2-27B; 5 topics), scores out of 10, two separate rounds of reviewers:
+
+  | | Before | Now |
+  |---|---|---|
+  | All three models | 3.1 / 3.2 | 5.5 / 5.9 |
+  | Inkling-2-Mini | 2.0 / 2.1 | 6.0 / 6.1 |
+  | Qwen3.8-35B-A3B | 3.6 / 4.0 | 6.0 / 6.8 |
+  | Ternary-Bonsai-2-27B | 3.6 / 3.6 | 4.4 / 4.9 |
+
+  Accuracy did not drop (5.7 to 5.8). The articles are also longer and written 2-4x faster, because every lane no
+  longer reads a few thousand tokens of articles: Inkling 866 words in 22 s -> 1,719 in 11 s, Qwen 1,250 words in
+  5.6 s -> 2,017 in 4.2 s, Bonsai 27B 931 in 7.8 s -> 1,314 in 5.8 s.
+  A lookup (who, when, what happened), deep research, and the other lengths still use offline Wikipedia as before.
+  `RAPIDLI_EXPLAIN_WIKI=1` restores the old behaviour; `RAPIDLI_EXPLAIN_WIKI_SIZES` names the lengths it covers
+  (default `detailed`, the page's Long).
+- A second pass for planned answers, `Fan.revise` (every paragraph written again by a lane that has read the whole
+  draft), is in the code but off: it took 2-7 s and did not raise the score in the same review (`RAPIDLI_REVISE=1`
+  switches it on; `tests/test_revise.py`). An outline rule asking for the subject's whole scope did not help either and
+  was not kept.
+
+## Inkling 2 at speed (24 Nov 2026)
+
+- In all: Inkling-2-Mini UD-Q2_K_XL (the looped layout, `inkling2_loop`) on an RTX 4090 loads with 58-59 lanes at a
+  32k conversation context instead of 21, its lanes write 1,340 tok/s together instead of ~230, and long planned
+  answers come in at 150-185 tok/s (an article) and 250-305 tok/s (an in-depth explanation) where the latter had run at
+  ~84. UD-Q4_K_M: 29 lanes instead of 12, a long answer at 230 tok/s.
+  Qwen and Bonsai models run as before. Details below.
+- Inkling 2's lanes attend to each sequence's own cells (kv_rows) with the relative-position bias in a per-head mask
+  (`engine/llama/patch_zzzrows.py`, `engine/cuda/patch_zrowsmask.py`). Before, every pass built that bias over the
+  whole shared cache - every lane's cells - and the pass time grew with lanes x cells. Inkling-2-Mini UD-Q2_K_XL on an
+  RTX 4090, all lanes writing one greedy answer each: 62 lanes 231 -> 888 tok/s (246 -> 63 ms a pass); UD-Q4_K_M,
+  48 lanes 253 -> 811. A prompt read whose cells are out of order takes the same path: with a 32k conversation
+  context the layouts' reads had timed out after 30 s, now 0.3-1.1 s.
+- When the lanes write (one token each), Inkling's 3 query heads per K/V head are the 3 queries of one attention
+  (`engine/llama/patch_zzzzgqa.py`): each K/V head's cells - the shared prompt among them - are read once for the three
+  instead of once per head. 83 lanes: 1,259 -> 1,331 tok/s with a short shared prompt, 783 -> 1,006 with a 2,400-token
+  one, which is what the lanes of a planned answer share.
+- ggml-cuda: a concat of non-contiguous tensors with a short first dimension runs one thread per element
+  (`engine/cuda/patch_zconcat.py`; it was a block per row with all but a few threads idle, 24% of an Inkling pass).
+  Q2_K_XL 124 lanes 1,196 -> 1,497 tok/s, 62 lanes now 1,131. Qwen3.8-35B-A3B (96 lanes ~1,620) and
+  Ternary-Bonsai-2-2B (128 lanes ~11,750) are unchanged.
+- ggml-cuda: `ADD -> SCALE` and `TANH -> MUL` run as one kernel each (`engine/cuda/patch_zfuse2.py`; bit-identical
+  results). A pass of one Inkling token is ~5,400 kernels of ~2 us, so their number sets a single lane's speed:
+  12.0 -> 11.7 ms a token (1 lane), 22.5 -> 22.1 ms (8 lanes).
+- ggml-cuda: an F32 matrix on 4-8 columns takes the matrix-vector kernel instead of the tiled one
+  (`engine/cuda/patch_zmmvf32.py`). Inkling keeps its expert router and loop controls in F32, and with 8 lanes the
+  tiled kernel read them at ~80 GB/s, 11% of the GPU time. 4 lanes 18.3 -> 16.5 ms a pass, 8 lanes 22.1 -> 20.8 ms -
+  where the passes of a long answer mostly are (5-17 lanes writing on average). Qwen and Bonsai unchanged.
+  `GGML_CUDA_MMVF_F32_MAX=3` restores the stock choice.
+- Fitting: a looped model's attention cache counts each run of its looped blocks (Q2_K_XL: 24 blocks stored, 48 run);
+  the parked conversations and the drafting context take at most 640 MB and 1 GB of cache (11 and 4k on Inkling,
+  unchanged on Qwen); a start slower than the probe with nothing spilled goes back to the probe's conversation context
+  instead of cutting lanes; the lanes noted are the ones the engine runs. Q2_K_XL: 21 lanes -> 55 (32k context) or
+  116 (8k).
+- An answer ended as stuck on a nearly full card (under 3 GB free) fits the lanes again at once; the watchdog did that
+  only for answers still under way after 60 s, so the next answer hung the same way.
+
 ## Engine on llama.cpp b12631, Inkling 2 (23 Nov 2026)
 
 - The engine is built on Unsloth's llama.cpp release b12631-mix-acc0843 (commit 59f6620) instead of b12347

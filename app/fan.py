@@ -216,6 +216,13 @@ LAYOUT_DEEP_KINDS = (LAYOUT_DEEP
     .replace("Cover only its own point;", "Write the kind of paragraph its point names (an example is one worked example told in full; numbers are figures and what they mean; "
              "a pitfall is one mistake and how to avoid it; a comparison sets two things side by side). Cover only its own point;"))
 assert LAYOUT_DEEP_KINDS.count("<kind>") == 5 and "worked example" in LAYOUT_DEEP_KINDS and "different kinds" in LAYOUT_DEEP_KINDS
+# Fan.revise: a lane's reply that talks about the task instead of being the paragraph ("The user wants me to edit
+# paragraph <8>. Let me look at it:", "We need answer edit paragraph <10>...", "Here is a full article.": blind reviews
+# of revised articles, 24 Nov) is not taken
+REVISE_META = re.compile(r"(?i)<\d+>|\bparagraph\s*<|\bthe user\b|\blet me\b|\bhere is\b|\bhere's\b|\bwe need\b|\bI will\b|\bI'll\b|"
+                         r"\bedit(?:ed|ing)?\s+(?:the\s+)?paragraph|\bthe draft\b|\bthis paragraph\b|\brewritten paragraph\b")
+# (an outline rule for the whole subject's scope - "a history runs from its beginnings to the present day" - was tried
+# with the Wikipedia text gone: 5.7 of 10 against 5.9 without it in a blind review of 15 Long articles, 24 Nov; not kept)
 
 ASPECTS = ["The short answer", "What it is", "How it works", "Why it matters", "Causes", "Effects and consequences", "History and background",
            "Key numbers and facts", "A worked example", "A real-world case", "Comparison of the options", "Costs and money", "Benefits",
@@ -2269,6 +2276,83 @@ class Fan:
                 blocks[j] = new
                 n["conclusion"] = 1
         return "\n\n".join(blocks), {k: v for k, v in n.items() if v}
+
+    def revise(self, text, question=""):
+        """The second pass of a planned answer: its paragraphs were written side by side, each lane seeing only the
+        question and the outline, so they say the same thing twice, open without context and keep broken sentences.
+        Every paragraph now gets a lane that reads the whole draft (read once for all of them) and writes its own
+        paragraph again as part of the whole - or drops it when every point of it is made elsewhere.
+        Prose paragraphs only: headings, lists, tables, code and diagrams stay as they are.
+        Off unless RAPIDLI_REVISE=1: measured on 15 Long articles a version (3 models, blind review, 24 Nov) it took 2-7 s
+        and did not lift the score (3.4 against 3.1 with offline Wikipedia's text, 5.3 against 5.5 without); the lanes
+        seldom drop a repeat, and some replied with talk about the task (now not taken, REVISE_META).
+        -> (text, {"revised": n, "dropped": n})"""
+        import lint
+        blocks = re.split(r"\n[ \t]*\n", text)
+        skip = re.compile(r"\s*(#{1,6} |[-*+] |\d+[.)] |\||>|```|\[\d+\]\s*$)")
+        code = False
+        jobs = []                              # block indexes to write again
+        for j, b in enumerate(blocks):
+            s = b.strip()
+            if s.count("```") % 2:
+                code = not code
+                continue
+            if code or not s or skip.match(s) or "\n" in s:
+                continue
+            if 20 <= len(s.split()) <= 260:
+                jobs.append(j)
+        width = max(1, int(getattr(self, "lanes", 0) or 0) - 1)
+        if len(jobs) < 3 or len(jobs) > width:
+            return text, {}
+        mark = {j: k + 1 for k, j in enumerate(jobs)}
+        draft = "\n\n".join((f"<{mark[j]}> " + b.strip()) if j in mark else b.strip() for j, b in enumerate(blocks) if b.strip())
+        if len(draft) / 3.2 > max(1500, int(os.environ.get("FAN_REVISE_MAX_TOKENS", "7000"))):
+            return text, {}
+        ask = (f"Below is a draft article that answers the question \"{question[:300]}\". Several writers wrote its paragraphs at "
+               "the same time, each without seeing the others, so paragraphs repeat each other, start without context or "
+               "contain broken sentences. Each paragraph to edit is marked <n>.\n\n=== DRAFT ===\n" + draft + "\n=== END OF DRAFT ===\n\n"
+               "You will now edit one paragraph, named after this text. Write that paragraph again so that it reads well as "
+               "part of the whole article:\n"
+               "- keep its facts, names, numbers and [n] citations, and add no new claims;\n"
+               "- leave out what other paragraphs already say, and keep what only this paragraph says;\n"
+               "- mend broken, unfinished or garbled sentences;\n"
+               "- where it helps, tie it to the paragraph before it in a few words; do not begin with This, It, These or They;\n"
+               "- keep about the same length and the same language; plain prose, no heading, no <n> mark.\n"
+               "If every point of the paragraph is already made elsewhere in the draft, reply with the single word DROP.\n"
+               "Reply with the new paragraph only.\n\n")
+        lim = lambda j: max(60, min(320, int(len(blocks[j].split()) * 1.9) + 40))
+        try:
+            done = self.fork({"prompt": system_block("") + USER_OPEN + ask,
+                              "branches": [f"Edit paragraph <{mark[j]}>." + CHAT_TAIL + TAIL_GAP for j in jobs],
+                              "n_predict": max(lim(j) for j in jobs), "stop": ["\n\n"],
+                              "temperature": float(os.environ.get("FAN_REVISE_TEMP", "0"))})["done"]
+        except Stopped:
+            raise
+        except Exception as e:
+            print("revise:", str(e)[:160], flush=True)
+            return text, {}
+        n = {"revised": 0, "dropped": 0}
+        most_drop = len(jobs) // 4
+        for j, d in zip(jobs, done):
+            new = re.sub(r"^\s*<\d+>\s*", "", (d.get("content") or "").strip()).strip().strip('"').strip()
+            old = blocks[j].strip()
+            if re.fullmatch(r"\W*DROP\W*", new):
+                if n["dropped"] < most_drop:
+                    blocks[j] = ""
+                    n["dropped"] += 1
+                continue
+            if d.get("stop") == "limit" or not new or "DROP" in new or "\n" in new or REVISE_META.search(new):
+                continue
+            ow, nw = len(old.split()), len(new.split())
+            if nw < 0.5 * ow or nw > 1.8 * ow + 20 or lint.PRONOUN_OPEN.match(new):
+                continue
+            # no citation the paragraph did not have (a lane that cites [4] for a sentence of [2]'s is a wrong source)
+            had = set(re.findall(r"\[(\d+)\]", old))
+            new = re.sub(r"\s?\[(\d+)\]", lambda m: m.group(0) if m.group(1) in had else "", new)
+            if new != old:
+                blocks[j] = new
+                n["revised"] += 1
+        return "\n\n".join(b for b in blocks if b.strip()), {k: v for k, v in n.items() if v}
 
     def repeated_bullets(self, text):
         """The bullets of a planned answer that only say again what an earlier bullet said: the lanes write side by side

@@ -155,22 +155,66 @@ def repo_name(text):
     return t if t.count("/") == 1 and " " not in t and all(t.split("/")) else None
 
 
+# architectures (general.architecture, as Hugging Face reports a repository's GGUF) that are mixtures of experts, and
+# those whose files keep an MTP head (nextn layers) that Rapidli drafts with
+MOE_ARCH = re.compile(r"(?i)moe|^(?:qwen3next|qwen4exp|deepseek2|gpt-oss|llama4|inkling2|dots1|bailingmoe|hunyuan|minimax|glm4moe)")
+MTP_ARCH = re.compile(r"(?i)^(?:qwen35|qwen35moe|qwen3next|qwen4exp|glm4moe)$")
+
+
+def models_not_chat(arch):
+    """an architecture that is no chat model (a vision projector "clip", an embedding model, ...; models.NOT_CHAT)"""
+    import models
+    return bool(models.NOT_CHAT.match(str(arch)))
+
+
+def abilities_guess(rid, tags=(), arch=""):
+    """What a search result can likely do, from its name, tags and architecture (the files are not read for a list):
+    {"mtp": "yes" | "likely" | "", "moe": bool}. "yes": the name says MTP, or a tag does on an architecture with MTP
+    heads. "likely": an architecture (or, unknown, a family: Qwen 3.5-3.8, Qwen3-Next) whose files usually keep the head;
+    a fine-tune can have dropped it (Ternary-Bonsai is qwen35 and has none), so the page reads the header when the model
+    is opened (abilities). Not Inkling 2: its "mtp" tag means a DSpark drafter shipped beside it, which Rapidli's engine
+    does not use, and its files have no MTP head."""
+    name, tl, arch = rid.split("/")[-1], [str(t).lower() for t in tags or ()], str(arch or "")
+    mtp_arch = bool(MTP_ARCH.match(arch)) if arch else bool(re.search(r"(?i)qwen3\.[568]|qwen3[-_.]?next", name))
+    if arch.lower().startswith("inkling"):
+        mtp = ""
+    elif re.search(r"(?i)(?:^|[-_.])mtp(?:[-_.]|$)", name) or ("mtp" in tl and mtp_arch):
+        mtp = "yes"
+    else:
+        mtp = "likely" if mtp_arch or "mtp" in tl else ""
+    # (Qwen3-Next and Qwen3.8-Flash-Next are mixtures of experts without an "A3B" in the name)
+    moe = bool((arch and MOE_ARCH.search(arch))
+               or re.search(r"(?i)(?:^|[-_.])A\d+(?:\.\d+)?B(?:[-_.]|$)|(?:^|[-_.])(?:moe|next)(?:[-_.]|$)|mixtral|gpt-oss|deepseek-(?:v[23]|r1)", name)
+               or "moe" in tl or "mixture-of-experts" in tl)
+    return {"mtp": mtp, "moe": moe}
+
+
 def search(q="", sort="trending", limit=30):
     """GGUF chat models on Hugging Face that match q (all of them when q is empty), most trending / downloaded / liked /
-    recent first. Only the words typed are sent; no token."""
-    import re
-    url = (HUB + "/api/models?filter=gguf&full=false&direction=-1&limit=" + str(max(5, min(int(limit), 60)) + 10)
-           + "&sort=" + SORTS.get(sort, "trendingScore") + ("&search=" + urllib.parse.quote(q.strip()[:80]) if q.strip() else ""))
+    recent first. Only the words typed are sent; no token. Each result carries what Hugging Face read from its GGUF
+    files: the parameters ("params", which size and "fits" are judged by: a name like "Inkling-2-Mini" says none), the
+    architecture and the context."""
+    # (expand[]=gguf: the parameters, architecture and context of each repository's GGUF; with expand only the fields
+    # named come back, so all that is used is named. The chat template that comes with them is not passed on)
+    fields = ["gguf", "likes", "downloads", "lastModified", "createdAt", "tags", "pipeline_tag", "gated", "private"]
+    url = (HUB + "/api/models?filter=gguf&direction=-1&limit=" + str(max(5, min(int(limit), 60)) + 10)
+           + "&sort=" + SORTS.get(sort, "trendingScore") + "".join("&expand[]=" + f for f in fields)
+           + ("&search=" + urllib.parse.quote(q.strip()[:80]) if q.strip() else ""))
     out = []
     for it in _get(url):
         rid = it.get("id") or it.get("modelId") or ""
         if "/" not in rid or it.get("private") or it.get("pipeline_tag") in NOT_CHAT_TASK:
             continue
-        tags = it.get("tags") or []
+        tags, gg = it.get("tags") or [], it.get("gguf") or {}
+        # (some repositories report their vision projector's GGUF - "clip", 0.5B - instead of the model's: unknown then)
+        if gg.get("architecture") and models_not_chat(gg.get("architecture")):
+            gg = {}
         out.append({"repo": rid, "owner": rid.split("/")[0], "name": rid.split("/")[1], "likes": it.get("likes") or 0,
                     "downloads": it.get("downloads") or 0, "updated": it.get("lastModified") or it.get("createdAt") or "",
                     "task": it.get("pipeline_tag") or "", "gated": bool(it.get("gated")),
-                    "vision": it.get("pipeline_tag") == "image-text-to-text" or "vision" in tags or "multimodal" in tags})
+                    "vision": it.get("pipeline_tag") == "image-text-to-text" or "vision" in tags or "multimodal" in tags,
+                    "params": int(gg.get("total") or 0), "arch": str(gg.get("architecture") or ""), "context": int(gg.get("context_length") or 0),
+                    **abilities_guess(rid, tags, gg.get("architecture"))})
     return out[:max(5, min(int(limit), 60))]
 
 
@@ -197,6 +241,11 @@ class _Ranged:
         return b
 
     def tell(self):
+        return self.pos
+
+    def seek(self, n, whence=0):
+        """(models.header skips arrays with seek(n, 1); what is skipped is fetched when a later read reaches past it)"""
+        self.pos = self.pos + n if whence == 1 else n
         return self.pos
 
 
@@ -240,6 +289,45 @@ def file_split(repo, file, token=""):
         kept[key] = out
         os.makedirs(os.path.dirname(SPLITS), exist_ok=True)
         json.dump(kept, open(SPLITS, "w", encoding="utf8"), indent=1)
+    return out
+
+
+ABILITIES = os.path.join(os.path.dirname(SPLITS), "hf-abilities.json")
+
+
+def abilities(repo, file, token=""):
+    """What a GGUF file on Hugging Face can do, read from its header (its first part's, a few MB, ranged reads):
+    {"mtp": bool (an MTP head: Rapidli drafts with it), "experts": n (a mixture of experts), "arch", "context"}.
+    Kept in data/hf-abilities.json by repository and file."""
+    import re
+    import models
+    repo = repo_name(repo)
+    if not repo or not str(file).lower().endswith(".gguf"):
+        raise ValueError('a repository ("owner/name") and one of its GGUF files')
+    m = re.search(r"-(\d{5})-of-(\d{5})\.gguf$", file)
+    first = file[:m.start()] + f"-00001-of-{m.group(2)}.gguf" if m else file
+    key = f"{repo}|{first}"
+    with _splits_lock:
+        try:
+            kept = json.load(open(ABILITIES, encoding="utf8"))
+        except Exception:
+            kept = {}
+    if key in kept:
+        return kept[key]
+    url = HUB + "/" + urllib.parse.quote(repo, safe="/") + "/resolve/main/" + urllib.parse.quote(first)
+    meta = models.header(_Ranged(url, token), want_template=False)
+    arch = str(meta.get("general.architecture", ""))
+    a = lambda k: meta.get(f"{arch}.{k}")
+    out = {"mtp": int(a("nextn_predict_layers") or 0) > 0, "experts": int(a("expert_count") or 0), "arch": arch,
+           "context": int(a("context_length") or 0)}
+    with _splits_lock:
+        try:
+            kept = json.load(open(ABILITIES, encoding="utf8"))
+        except Exception:
+            kept = {}
+        kept[key] = out
+        os.makedirs(os.path.dirname(ABILITIES), exist_ok=True)
+        json.dump(kept, open(ABILITIES, "w", encoding="utf8"), indent=1)
     return out
 
 

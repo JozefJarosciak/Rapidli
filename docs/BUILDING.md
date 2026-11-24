@@ -124,6 +124,8 @@ the CUDA installer sets.
 | `patch_zzmoelog.py` | the MoE cache's figures while it runs (`LLAMA_MOE_CACHE_LOG=<n>`), and `LLAMA_MOE_CACHE_MAX_BATCH`: passes of up to that many tokens use the cache (llama.cpp: 32) |
 | `patch_zzi8more.py` | the 8-bit recurrent state (`patch_i8.py`) also for qwen35moe (Qwen3.6/3.8-35B-A3B), qwen4exp (Qwen3.8-Flash-Next) and qwen3next |
 | `patch_zzmoepin.py` | the MoE cache's host experts are registered as pinned memory once per process (read only; `LLAMA_MOE_PIN=0` turns it off): misses are uploaded at ~23 instead of ~10 GB/s |
+| `patch_zzzzgqa.py` | Inkling 2, one token per lane over the kv_rows lists: the 3 query heads that share a K/V head are the 3 queries of one attention, so each K/V head's cells (the shared prompt among them) are read once for the three. 83 lanes: 1,259 -> 1,331 tok/s with a short shared prompt, 783 -> 1,006 with a 2,400-token one (`LLAMA_REL_ROWS_NOGROUP=1`: as before) |
+| `patch_zzzrows.py` | Inkling 2: the lanes' attention over each sequence's own cells (kv_rows) with the relative-position bias in a per-head mask, instead of a bias over the whole shared cache; a prompt read whose cells are out of order takes the same path. 62 lanes of Inkling-2-Mini Q2_K_XL: 231 -> 888 tok/s (`LLAMA_REL_ROWS_DISABLE=1`: as before; needs `engine/cuda/patch_zrowsmask.py`) |
 
 | Patch (`engine/cuda`) | What it does |
 |---|---|
@@ -139,6 +141,16 @@ the CUDA installer sets.
 | `patch_mmvq_switch.py` | `GGML_CUDA_MMVQ_Q2_0=<n>`: up to which batch Q2_0 uses the vector kernel (default 8, as measured best) |
 | `patch_optime.py` | a timer per operation (`GGML_CUDA_OPTIME`), for finding where a pass goes |
 | `patch_sample.py` | one fused sampling kernel for all lanes' rows of logits |
+| `patch_zrowsmask.py` | the kv_rows flash attention takes a mask with a head dimension (for `patch_zzzrows.py`; other models' masks have none) |
+| `patch_zfuse2.py` | `ADD -> SCALE` and `TANH -> MUL` (plain F32 tensors of one shape) as one kernel each, the same arithmetic: ~290 fewer kernels in an Inkling 2 pass of one token, 12.0 -> 11.7 ms (`GGML_CUDA_DISABLE_RAPIDLI_FUSE2=1`: one by one) |
+| `patch_zconcat.py` | a concat of non-contiguous tensors with a first dimension under 64 runs one thread per element (the same bytes): Inkling 2's block states and short-convolution histories, 124 lanes 1,196 -> 1,497 tok/s |
+| `patch_zmmvf32.py` | an F32 matrix on up to 8 columns uses the matrix-vector kernel (MMVF) instead of the tiled `mul_mat_f` above 3 columns, on NVIDIA GPUs with tensor cores: Inkling 2's f32 router and loop controls, 4 lanes 18.3 -> 16.5 ms a pass, 8 lanes 22.1 -> 20.8 ms (`GGML_CUDA_MMVF_F32_MAX=3`: stock) |
+| `patch_zmmvfsplit.py` | experiment, off unless `GGML_CUDA_MMVF_F32_SPLIT=1`: an F32 matrix on 9-16 columns runs MMVF on two slices of 8. Inkling 2 Q2_K_XL, 16 lanes: 28.9 -> 28.1 ms a pass; 24 lanes unaffected; not yet measured on other models |
+
+(`engine/cuda/wip_zrowsdist.py` and `engine/llama/wip_zzzrowsdist.py` are an experiment, not applied: the Inkling
+bias looked up in the kernel from a distance mask, so that all lanes can be one slice over the union of their cells.
+It is correct, but only 8% faster with a 2,400-token shared prompt and 25% slower with a short one (83 lanes); see the
+script's notes.)
 
 ## A release
 

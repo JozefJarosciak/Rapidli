@@ -159,7 +159,7 @@ and [docs/BUILDING.md](docs/BUILDING.md) lists every patch and what it changes.
    library) with one click. Skip it if you like; Settings › Offline Wikipedia has other editions and languages.
 2. **A model.** Rapidli looks for GGUF chat models in the Hugging Face cache, in the folders of LM Studio, Ollama,
    Jan, GPT4All and llama.cpp, in `models` and Downloads folders, and in any folder you add (Settings › Models). With
-   none, open **Settings › Get models**, pick one marked "fits", and download it.
+   none, open **Settings › Models › Get models**, pick one marked "fits", and download it.
 3. **Choose it** with the model button in the composer. The first load fits its lanes (about half a minute); later
    loads start from what was measured.
 4. **Ask.** Long answers ("write a long article about…", "a report on…") use the most lanes. Pick the length per
@@ -262,7 +262,7 @@ More in [docs/RESULTS.md](docs/RESULTS.md); how each speed-up was found, includi
   system memory. Rapidli notices and fits again; you can also press **Fit again** in the model menu.
 - **Few lanes:** other programs hold graphics memory. The line under the model's name and the engine panel name them;
   close them and press Fit again.
-- **No model found:** add the folder your models are in under Settings › Models, or use Get models.
+- **No model found:** add the folder your models are in under Settings › Models, or use Settings › Models › Get models.
 - **Rapidli does not start:** see `data/logs/rapidli.err.log` and `data/logs/engine-11832.log`. On Windows, check that
   `engine\bin\rapidli-engine.exe` exists and the CUDA Toolkit 13 is installed. On Linux, "the engine is not built"
   means `engine/build-linux.sh` has not been run.

@@ -39,6 +39,8 @@ loads = []
 R.load_model = lambda m, fresh=False, why=None: loads.append(why)
 R.STATE.update(status="ready", model={"id": "test"})
 R.STUCK_S = 2
+room = {"mb": 6000}                           # free graphics memory the app sees
+R.card_room_mb = lambda: room["mb"]
 
 # an answer that hangs while the engine is idle
 g = R.GATE
@@ -59,6 +61,24 @@ ok = threading.Event()
 threading.Thread(target=lambda: (g.wait(t2), ok.set()), daemon=True).start()
 check("... which starts at once", ok.wait(2))
 g.leave(t2)
+check("... and with room on the card, the lanes are not fitted again", not loads, loads)
+
+# the same on a nearly full card: the engine's memory was moved off the card, so the lanes are fitted again at once
+room["mb"] = 800
+t = g.join(chat="hung-full", cap=4)
+g.wait(t)
+h = FakeHandler()
+t.handler = h
+t.last = time.time()
+mem = {}
+R.stuck_step(mem)
+time.sleep(2.3)
+r = R.stuck_step(mem)
+time.sleep(0.2)
+check("a hung answer on a nearly full card fits the lanes again", "fitting again" in r and len(loads) == 1 and "800 MB" in (loads[0] or ""), (r, loads))
+check("... and its page is told to ask again", b"ask again in a minute" in h.wfile.getvalue())
+loads.clear()
+room["mb"] = 6000
 
 # an answer that is quiet while the engine writes (a long prompt read, a long plan) is left alone
 t = g.join(chat="slow", cap=4)

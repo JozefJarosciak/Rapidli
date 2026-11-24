@@ -2146,10 +2146,25 @@ def stuck_step(mem, now=None):
     if not ago or ago[-1][1] != marks[-1][1]:
         return "engine busy"                  # (the engine wrote something: whatever waits, waits for it)
     done = []
-    for t in list(GATE.running):
-        if not t.stuck and now - max(t.last, t.t0 or t.t_in) > limit:
-            end_stuck(t, f"no progress for {limit} s while the engine wrote nothing")
-            done.append(t.chat)
+    hung = [t for t in GATE.running if not t.stuck and now - max(t.last, t.t0 or t.t_in) > limit]
+    # An engine that finished no pass at all on a nearly full card has had its memory moved to the PC's memory by Windows
+    # (other programs took back what they hold): every pass crawls until the lanes are fitted again. The watchdog does
+    # that only for an answer still under way after two looks (60 s), so an answer ended here at 45 s left the engine
+    # that slow, and the next answer hung the same way (Inkling-2-Mini, 23 Nov: 15.5 GB of weights and an attention
+    # cache in all 48 layers next to Snagit's 3.7 GB and the desktop's 3.5 GB; layouts and questions read nothing for
+    # minutes, 30-45 s for 400 tokens). Fitted again here, at once.
+    room = card_room_mb() if hung and not (STATE.get("fit") or {}).get("moe") else 0
+    refit = bool(hung) and 0 < room < PROBE_TIGHT_MB and STATE["model"] and not STATE["switch"].locked()
+    for t in hung:
+        end_stuck(t, f"no progress for {limit} s while the engine wrote nothing"
+                  + (f"; only {room} MB of the graphics card is free, so the lanes are being fitted again: ask again in a minute"
+                     if refit else ""))
+        done.append(t.chat)
+    if refit:
+        why = f"an answer stood still for {limit} s with {room} MB of the card free (memory moved off the card): fitting the lanes again"
+        print("watchdog:", why, flush=True)
+        threading.Thread(target=load_model, args=(STATE["model"], True, why), daemon=True).start()
+        done.append("fitting again")
     rf = READ_AHEAD.get("fan")
     if rf is not None and now - READ_AHEAD.get("t", now) > 2 * STUCK_S:
         print(time.strftime("%H:%M:%S"), "stuck: a read-ahead made no progress; stopped", flush=True)
@@ -2648,6 +2663,14 @@ class Handler(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             try:
                 self.send_json(downloads.file_split((q.get("repo") or [""])[0], (q.get("file") or [""])[0], settings.load()["downloads"].get("hf_token") or ""))
+            except Exception as e:
+                self.send_json({"error": str(e)[:200]}, 502)
+        elif p == "/api/hf/abilities":
+            # what a file on Hugging Face can do (an MTP head, experts), read from its header: Get models shows it for
+            # the repository opened, where the list could only guess from the names
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                self.send_json(downloads.abilities((q.get("repo") or [""])[0], (q.get("file") or [""])[0], settings.load()["downloads"].get("hf_token") or ""))
             except Exception as e:
                 self.send_json({"error": str(e)[:200]}, 502)
         elif p == "/api/hf/model":
@@ -3637,11 +3660,21 @@ class Handler(BaseHTTPRequestHandler):
             said_ = re.split(r"\n\n\[File: ", text)[0]
             # offline Wikipedia (the files chosen in Settings): on this PC, nothing to block or rate-limit. Asked first
             # unless the web is put first in the Search panel; the other is asked only when the first does not answer.
-            kfiles = kiwix_files(cfg) if use_kiwix and not link_block and not images else []
+            want0 = str(b.get("size") or cfg["chat"].get("length") or "auto")
+            # ... but not for a Long explanation (an article, how something works): its writers then paraphrase the
+            # offline (Simple English) Wikipedia text and the plan shrinks to what that text covers. Blind review of 15
+            # Long articles a version, 3 models, 24 Nov: without it 5.5 of 10 against 3.1 (Inkling 6.0 against 2.0),
+            # accuracy 5.8 against 5.7, and written 2-4x faster (every lane read the text too). A lookup (who, when,
+            # what happened) still gets it, and so does deep research. RAPIDLI_EXPLAIN_WIKI=1: as before
+            asked_deep = bool(b.get("deep") if b.get("deep") is not None else msgs[-1].get("deep"))
+            explain_plain = (os.environ.get("RAPIDLI_EXPLAIN_WIKI", "0") != "1" and not asked_deep and explanatory(said_)
+                             and want0 in os.environ.get("RAPIDLI_EXPLAIN_WIKI_SIZES", "detailed").split(","))
+            kfiles = kiwix_files(cfg) if use_kiwix and not link_block and not images and not explain_plain else []
+            if explain_plain and use_kiwix:
+                print(time.strftime("%H:%M:%S"), "offline Wikipedia: not used for a Long explanation", flush=True)
             # a long answer (asked for, or what Auto will choose) on a broad subject is researched more widely: more
             # offline articles and more web queries, each shorter (see kiwix_terms, search_query; the source of an
             # offline article now names the title it was found by, not the whole question, 20 Nov)
-            want0 = str(b.get("size") or cfg["chat"].get("length") or "auto")
             # (an answer written again keeps its question's deep research)
             deep = bool(b.get("deep") if b.get("deep") is not None else msgs[-1].get("deep")) and bool(use_search or kfiles) and not link_block and not images
             wide = deep or ((want0 in ("detailed", "report", "long") or (want0 == "auto" and sizing.choose(said_).get("size") in ("detailed", "report", "long")))
@@ -4439,6 +4472,21 @@ class Handler(BaseHTTPRequestHandler):
                         if lint_n:
                             result.setdefault("timeline", []).append({"t": round(result.get("seconds") or 0, 3), "what": "tidied: " + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in lint_n.items())})
                             print(time.strftime("%H:%M:%S"), "tidied:", lint_n, flush=True)
+                    if (os.environ.get("RAPIDLI_REVISE", "0") == "1" and result.get("route", "").startswith("fan")
+                            and size in os.environ.get("RAPIDLI_REVISE_SIZES", "detailed").split(",")):
+                        # the second pass: every paragraph written again by a lane that has read the whole draft (see
+                        # Fan.revise), against repeats between lanes, openings without context and broken sentences
+                        t_r = time.time()
+                        try:
+                            content, rev = fn.revise(content, said)
+                        except Exception as e:            # (stopped too: the answer is kept as it was)
+                            rev = {}
+                            print("revise:", str(e)[:160], flush=True)
+                        if rev:
+                            lint_n = {**lint_n, **rev}
+                            result.setdefault("timeline", []).append({"t": round((result.get("seconds") or 0) + time.time() - t_r, 3),
+                                                                     "what": "revised: " + ", ".join(f"{v} {k}" for k, v in rev.items()), "seconds": round(time.time() - t_r, 2)})
+                        print(time.strftime("%H:%M:%S"), f"revise: {rev} in {time.time() - t_r:.1f} s", flush=True)
                     if os.environ.get("RAPIDLI_POLISH", "1") == "1":
                         # section openings that point at another lane's words, and a conclusion about one corner of the
                         # answer, written again (one pass, a lane each; see Fan.polish)

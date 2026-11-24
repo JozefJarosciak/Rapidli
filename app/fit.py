@@ -25,6 +25,8 @@ SPEC_SPILL_S = 3.0         # the drafting context reads ~800 tokens in 0.3 to 0.
 FREE_SHARE = 0.5
 WORKOUT_SPILL_S = 20       # seconds: a first pass with all lanes slower than this has spilled (it takes ~1 s when it fits)
 LANE_EXTRA = 1.25          # what a lane really takes, against its states alone (see lanes_for in fit)
+VAULT_MB = 640             # the most the parked states may take (80 on a 35B; 10 on Inkling-2-Mini, see probe_budget)
+SPEC_CTX_MB = 1024         # the most an 8k drafting context may take; above it, 4k
 CTX = 300
 
 
@@ -503,6 +505,12 @@ def kv_cell_mb(path):
     k_len = int(a("attention.key_length", 0) or (embd // heads if heads else 0))
     v_len = int(a("attention.value_length", 0) or k_len)
     every = int(a("full_attention_interval", 0) or 0)
+    # a looped model stores some blocks once and runs them loop.count times: each run keeps its own cache (Inkling-2-Mini
+    # Q2_K_XL, inkling2_loop: 24 blocks stored, 6..18 run 3 times = 48 layers with attention, 23 Nov; counted as 24, its
+    # cache was taken for half its size and 80 parked states filled the card)
+    loops, l0, l1 = int(a("loop.count", 0) or 0), int(a("loop.start", 0) or 0), int(a("loop.end", 0) or 0)
+    if loops > 1 and 0 <= l0 < l1 <= n_layer:
+        n_layer += (l1 - l0) * (loops - 1)
     layers = n_layer // every if every > 1 else n_layer
     if not (layers and kv and k_len):
         return None
@@ -520,20 +528,30 @@ def probe_budget(path, common, margin, mmproj=None, lanes=8):
     per_cell = kv_cell_mb(path)
     if not per_cell:
         return {}
-    try:
-        used, total = card()
-    except Exception:
-        return {}
-    model_mb = os.path.getsize(path) / 2**20 + (os.path.getsize(mmproj) / 2**20 if mmproj and os.path.exists(mmproj) else 0)
-    # cells the attention cache may hold: what is left after the weights, the margin and ~1.5 GB of buffers
-    cells = (total - used - margin - model_mb - 1536) / per_cell
     vault, ctx = int(common.get("vault") or 0), int(common["ctx_extra"])
     # (the drafting context is there for MTP drafting ("spec") and for drafting by copying ("lookup") alike)
     spec = int(common.get("spec_ctx") or 0) if (common.get("spec") or common.get("lookup")) else 0
+    out = {}
+    # Whatever the card has free, the parked states and the drafting context get no more than they cost on a model with a
+    # small attention cache: on Qwen3.8-35B 80 parked states take ~0.5 GB, on Inkling-2-Mini (attention in all 48
+    # layers, 59 MB a state) 4.7 GB, and its 8k drafting context 1.6 GB - the room of ~80 lanes, and every pass reads
+    # attention across all those cells (Q2_K_XL, 23 Nov: 21 lanes, 73 ms a pass with 8 where the Q4_K_M took 37)
+    if vault > 8 and vault * CTX * per_cell > VAULT_MB:
+        vault = max(8, int(VAULT_MB // (CTX * per_cell)))
+        out["vault"] = vault
+    if spec > 4096 and spec * per_cell > SPEC_CTX_MB:
+        spec = 4096
+        out["spec_ctx"] = spec
+    try:
+        used, total = card()
+    except Exception:
+        return out
+    model_mb = os.path.getsize(path) / 2**20 + (os.path.getsize(mmproj) / 2**20 if mmproj and os.path.exists(mmproj) else 0)
+    # cells the attention cache may hold: what is left after the weights, the margin and ~1.5 GB of buffers
+    cells = (total - used - margin - model_mb - 1536) / per_cell
     need = lambda v, s, c: (lanes + v) * CTX + s + c
     if need(vault, spec, ctx) <= cells:
-        return {}
-    out = {}
+        return out
     if vault > 8:
         vault = max(8, min(vault, int((cells - spec - ctx) // CTX) - lanes))
         out["vault"] = vault
@@ -574,6 +592,8 @@ def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=p
     # engine/cuda/patch_mmq_wide.py): Ternary-Bonsai-2-27B read 3,440-3,470 tokens a second instead of 3,310-3,320, with
     # no more of the card taken, 20 Nov; other types have tiles of up to 128 columns, which 256 fills)
     chunk = 320 if "Q2_0" in os.path.basename(str(path)).upper() else 256
+    # (not more for Inkling 2: 512 reads a 2,400-token prompt at 4,140 tok/s instead of 2,800, but its compute buffers
+    # cost the 32k conversation context - 16k was fitted instead - and long answers were no faster, 24 Nov)
     # (80: a page of 64 functions keeps 64 lanes' states between their windows, ~0.5 GB on a 35B; RAPIDLI_VAULT)
     vault = int(os.environ.get("RAPIDLI_VAULT", 80))
     common = dict(ctx=CTX, state=8, vault=vault, chunk=chunk, port=port, model=path, ctx_extra=8192 if auto else int(ctx_extra),
@@ -663,6 +683,7 @@ def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=p
         base = min(pass_ms(port, 8), pass_ms(port, 8))
         sbase = None
     used, total = card()
+    shared_probe = spilled_mb(eng.pid(port))      # the engine's memory in the PC's memory next to the probe (see below)
     # recurrent state and attention cells of a lane, and about 5% more (output rows, sampling buffers: measured on Bonsai-2)
     per_cell = nums["kv"] / max(1, nums["cells"]) * 1.05
     per_lane = (nums["rs"] / max(1, nums["seqs"]) + nums["kv"] / max(1, nums["cells"]) * CTX) * 1.05
@@ -742,9 +763,25 @@ def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=p
                 ms, sbase, ss = pass_ms_warm(port, 8, good=base * 1.6 + 4), None, None
                 ma = all_ms(port, lanes)
             break
+        # Slower than the probe with no more of the engine's memory in the PC's memory than next to the probe: nothing
+        # spilled, the larger conversation context did it. A model with attention in every layer reads its whole
+        # attention cache on every pass (Inkling-2-Mini Q2_K_XL, 23 Nov: 8 lanes 35 ms a pass next to 8k of context, 70 ms
+        # next to 32k; taken for spilled memory, it was cut from 23 lanes to 9 while the 32k stayed). Back to the probe's
+        # context, with the lanes it leaves room for.
+        if auto and attempt < 4 and common["ctx_extra"] > probe_ctx and spilled_mb(eng.pid(port)) - shared_probe < SPILL_MB:
+            smaller = [c for c in contexts if probe_ctx <= c < common["ctx_extra"]]
+            common["ctx_extra"] = max(smaller) if smaller else probe_ctx
+            if not lanes_fixed:
+                lanes = max(lanes, min(lanes_for(common["ctx_extra"]), int(lanes * 1.5)))
+            say(f"slower than the probe with no memory spilled: the attention cache is read on every pass, "
+                f"{common['ctx_extra'] // 1024}k of conversation context, {lanes} lanes")
+            continue
         lanes = max(8, int(lanes * 0.85))
         say(f"slower than the probe: memory spilled to the PC, {lanes} lanes")
     st = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/stats", timeout=5).read())
+    # the lanes the engine runs with, which the speeds below were measured on: after the last try the count was cut
+    # without a start, and 52 lanes were noted for an engine running 62 (23 Nov)
+    lanes = int(st.get("lanes") or lanes)
     chosen = common["ctx_extra"]
     options = [{"ctx": c, "lanes": max(0, int(min(MAX_SEQ - vault, lanes + (chosen - c) * per_cell / max(1.0, per_lane))))} for c in contexts]
     out = {"lanes": lanes, "per_lane_mb": round(per_lane, 1), "per_cell_mb": round(per_cell, 4), "ctx_extra": chosen, "options": options, "model_mb": round(nums["model"]), "pass_ms_8": round(ms, 1), "pass_ms_all": round(ma, 1), "spec_s": round(ss, 2) if ss else None,

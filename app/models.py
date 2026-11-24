@@ -14,8 +14,10 @@ CACHE = os.path.join(os.path.dirname(HERE), "data", "models.json")
 
 # architectures that are not chat models (vision projectors, image/audio models, encoders)
 NOT_CHAT = re.compile(r"^(clip|mmproj|qwenimage|qwen_image|flux|sd|stable|wan|whisper|wav|encodec|bert|nomic-bert|jina-bert|t5encoder|"
-                      r"gemma-embedding|embeddinggemma|wavtokenizer|snac|vits|parakeet|qwen3asr|qwen3_asr|asr)", re.I)
-NOT_CHAT_FILE = re.compile(r"(mmproj|dflash|draft|embedding|bge-|whisper|asr|tts|vae|clip|image)", re.I)
+                      r"gemma-embedding|embeddinggemma|wavtokenizer|snac|vits|parakeet|qwen3asr|qwen3_asr|asr|dflash|dspark)", re.I)
+# (dspark: a drafter shipped beside a model, "dspark-Inkling-2-Mini-Q8_0.gguf", architecture dflash; it was listed as
+# a chat model of its own and failed to load, 24 Nov)
+NOT_CHAT_FILE = re.compile(r"(mmproj|dflash|dspark|draft|embedding|bge-|whisper|asr|tts|vae|clip|image)", re.I)
 
 
 SKIP_DIRS = {"blobs", ".no_exist", "node_modules", "site-packages", "__pycache__", ".git", "venv", ".venv", "$recycle.bin"}
@@ -113,9 +115,11 @@ _SCALAR = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?
 
 
 def header(path, want_template=True):
-    """The metadata of a GGUF file (arrays are skipped, except short ones). Reads only the start of the file."""
+    """The metadata of a GGUF file (arrays are skipped, except short ones). Reads only the start of the file. path may
+    also be an open file-like object with read() and seek(n, 1) (a file on Hugging Face read in ranges, downloads.py)."""
+    import contextlib
     meta = {}
-    with open(path, "rb") as f:
+    with (contextlib.nullcontext(path) if hasattr(path, "read") else open(path, "rb")) as f:
         def rd(n):
             b = f.read(n)
             if len(b) != n:
