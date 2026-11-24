@@ -3669,7 +3669,7 @@ function renderApi() {
     ${togetherField("a-tog", a, "Several requests at once", "Side by side: requests are written at once, on the lanes that are free. One after another: each waits for the one before it (a streamed request is told its place in line).")}
     <div class="field"><label>Keep the API's chats</label><div class="help">Its conversations appear in the chat list, in a folder called API. Off: they are kept in the list without a folder.</div><div class="ctl">${sw("a-folder", a.folder !== false)}</div></div>
     <div class="field"><label>Other computers</label><div class="help">Open the API (only the API, never the app itself) to other computers on your network, with the key. Takes effect when Rapidli is started again; the firewall may need to let port 11842 through (Windows asks; on Linux, ufw or firewalld).</div><div class="ctl">${sw("a-net", !!a.network)}</div></div>
-    <div class="field stack"><label>Documentation</label><div class="help">Every route, field and answer, with examples: loading and unloading models, the length, thinking, offline Wikipedia, web search and deep research of each question.</div>
+    <div class="field stack"><label>Documentation</label><div class="help">Every route, field and answer, with examples: loading and unloading models, the length, thinking, offline Wikipedia, web search and deep research of each question; plain mode, contexts, priorities, batches and JSON replies for programs that send many related requests.</div>
       <div class="ctl"><button class="btn pri" id="a-docs">Open the full API documentation</button></div></div>
     <div class="field stack"><label>Load a model</label><div class="help"><code>GET /api/v1/models</code> lists the models on this PC; <code>model</code> is an <code>id</code> or a <code>label</code> from it. <code>"wait": true</code> answers once the model is ready (a big model can take minutes); without it the answer comes at once and <code>GET /api/v1/status</code> tells when it is ready. <code>POST /api/v1/models/unload</code> frees the graphics card.</div>
 <pre class="apiex">curl ${esc(base)}/api/v1/models/load${esc(auth)} \\
@@ -3698,7 +3698,18 @@ function renderApi() {
 <pre class="apiex">curl ${esc(base)}/v1/chat/completions${esc(auth)} \\
   -H "Content-Type: application/json" \\
   -d '{"model": "rapidli", "messages": [{"role": "user", "content": "Give me 5 tips for public speaking."}], "size": "answer"}'</pre></div>
-    <div class="field stack"><label>Also</label><div class="help"><code>GET /api/v1/status</code> the model, the lanes, its thinking levels, and the answers being written or waiting · <code>GET /v1/models</code> the model loaded now, as OpenAI lists models.</div></div>`;
+    <div class="field stack"><label>Many related requests</label><div class="help">For copilots, agents and document tools. <b>Plain mode</b> (<code>"mode": "plain"</code>): the messages as they are, the whole system prompt at the front in the model's own format, one lane, streamed token by token, with <code>max_tokens</code>, <code>temperature</code>, <code>top_p</code>, <code>stop</code>, <code>seed</code> and a <code>priority</code>; not kept as a chat. <b>Contexts</b>: a long text read once (<code>POST /api/v1/contexts</code>), then any number of requests that name it read only their own new messages; text is appended as it grows. <b>Batches</b> (<code>POST /api/v1/batch</code>): many replies from one context on one connection. JSON replies with <code>response_format</code>.</div>
+<pre class="apiex">curl ${esc(base)}/api/v1/contexts${esc(auth)} \\
+  -H "Content-Type: application/json" \\
+  -d '{"messages": [{"role": "system", "content": "Answer questions about this document: …"}], "ttl_s": 600}'
+
+→ {"id": "ctx-…", "object": "context", "tokens": 5210, "limit": 32768, …}
+
+curl ${esc(base)}/v1/chat/completions${esc(auth)} \\
+  -H "Content-Type: application/json" \\
+  -d '{"context": "ctx-…", "stream": true, "max_tokens": 200, "priority": "high",
+       "messages": [{"role": "user", "content": "Who signed it?"}]}'</pre></div>
+    <div class="field stack"><label>Also</label><div class="help"><code>GET /api/v1/status</code> the model, the lanes busy and free, the context limit, the places for contexts, vision, the chat format, the card's memory and a load's progress (<code>GET /api/v1/status/events</code>: the same whenever it changes) · <code>POST /api/v1/models/load</code> takes <code>lanes</code>, <code>context</code>, <code>margin_mb</code>, <code>vision</code> and <code>drafting</code> for one load · <code>GET /v1/models</code> the model loaded now, as OpenAI lists models.</div></div>`;
   const toggle = (id, key2, after) => { const b = $(id); b.onclick = async () => { const v = b.getAttribute("aria-checked") !== "true"; b.setAttribute("aria-checked", String(v)); await saveSet("api", key2, v); if (after) after(); }; };
   toggle("a-on", "enabled", () => renderApi());
   toggle("a-key", "require_key", () => renderApi());

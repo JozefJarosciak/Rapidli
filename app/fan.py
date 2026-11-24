@@ -881,6 +881,14 @@ def pick(cands, others):
     return best
 
 
+# Parked states that other parts of the app own (the API's contexts, app/plain.py): free_slots, and heal through it,
+# never release them. A function, set by their owner, that gives their session numbers now.
+PINNED = lambda: ()
+# The priority of this thread's engine calls ("high", "normal", "low"; None = the engine's default, normal): set by the
+# API for a request that asks for one, so that the parked texts it reads are read at that priority too.
+PRIO = threading.local()
+
+
 class Fan:
     def __init__(self, port=11832):
         self.url = f"http://127.0.0.1:{port}"
@@ -1035,6 +1043,8 @@ class Fan:
     def post(self, path, body, timeout=600):
         if self.halt.is_set() and path != "/release":
             raise Stopped()
+        if getattr(PRIO, "p", None) and "priority" not in body and path != "/release":
+            body = {**body, "priority": PRIO.p}
         r = urllib.request.Request(self.url + path, data=json.dumps(body).encode(), headers={"content-type": "application/json"})
         if getattr(self, "call_timeout", None):
             timeout = min(timeout, self.call_timeout)
@@ -1048,6 +1058,8 @@ class Fan:
 
     def fork(self, body, on_rows=None, timeout=900, on_open=None, path="/fork"):
         """One /fork call (or /spec, which answers in the same form). -> the final event {"done": [...], "timings": {...}}"""
+        if getattr(PRIO, "p", None) and "priority" not in body and path != "/release":
+            body = {**body, "priority": PRIO.p}
         r = urllib.request.Request(self.url + path, data=json.dumps(body).encode(), headers={"content-type": "application/json"})
         fin = None
         if getattr(self, "call_timeout", None):
@@ -1106,7 +1118,7 @@ class Fan:
         gone: a server restarted while the engine ran on left its parked conversation behind for good, and after a
         few restarts the engine had no slot left (18 Nov: "the engine has no free session slot" on every planned
         answer). -> number released"""
-        keep = set(keep_ids)
+        keep = set(keep_ids) | set(PINNED())     # (the API's contexts are never let go here: see app/plain.py)
         for n in keep_names:
             sid = self.lookup(n)
             if sid >= 0:

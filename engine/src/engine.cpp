@@ -20,8 +20,13 @@
 //                              "chat_template_kwargs": {"enable_thinking": false}}
 //                             ("stream": true answers with server-sent events, one chunk per pass)
 //   POST /completion          {"prompt": "<already templated text>", "n_predict": n}
+//                             ("stream": true answers with server-sent events in /fork's form, one branch)
 //   POST /warm                {"ms": n}: the card brought up to speed while the user types (no lane; see Warmer)
+//   POST /cancel              {"tag": "..."}: every request sent with this "tag" ends now (version 5)
 //   GET  /health, GET /stats
+// Every request may also carry (version 5) "priority": "high" | "normal" | "low" (a waiting request goes before those of
+// a lower priority; of the long prompts being read, the highest priority's first one is read first, to its end),
+// "top_p" (with a llama.dll that has patch_ztopp) and "tag".
 #include "llama.h"
 #include "ggml-backend.h"
 #include "cpp-httplib/httplib.h"
@@ -116,6 +121,26 @@ using json = nlohmann::ordered_json;
 extern "C" FQ_IMPORT void llama_fq_set_sampling(int32_t seq, float temperature, float min_p, uint32_t seed);
 // version 2 (engine/llama/patch_zfork.py): the whole memory of a sequence copied to other sequences, on the card
 extern "C" FQ_IMPORT int32_t llama_fq_fork(llama_context * ctx, int32_t seq_src, const int32_t * seq_dst, int32_t n_dst);
+// version 5 (engine/llama/patch_ztopp.py): the same with top-p (the smallest set of tokens whose probabilities, before
+// the temperature, add up to top_p). Looked up at start, so that this engine also runs on a llama.dll without it
+// (then top_p is not applied and /stats says "top_p": false).
+typedef void (*fq_set_sampling_p_t)(int32_t seq, float temperature, float min_p, float top_p, uint32_t seed);
+static fq_set_sampling_p_t g_set_sampling_p = nullptr;
+#if defined(_WIN32)
+#include <windows.h>
+static void find_top_p() {
+    HMODULE m = GetModuleHandleA("llama.dll");
+    g_set_sampling_p = m ? (fq_set_sampling_p_t) (void *) GetProcAddress(m, "llama_fq_set_sampling_p") : nullptr;
+}
+#else
+#include <dlfcn.h>
+static void find_top_p() { g_set_sampling_p = (fq_set_sampling_p_t) dlsym(RTLD_DEFAULT, "llama_fq_set_sampling_p"); }
+#endif
+// the sampling settings of a lane: with top-p when the request asks for it and the library has it
+static void set_sampling(int32_t seq, float temp, float min_p, float top_p, uint32_t seed) {
+    if (g_set_sampling_p && top_p > 0.0f && top_p < 1.0f) { g_set_sampling_p(seq, temp, min_p, top_p, seed); }
+    else { llama_fq_set_sampling(seq, temp, min_p, seed); }
+}
 
 static double now_ms() {
     using namespace std::chrono;
@@ -153,7 +178,12 @@ struct Request {
     std::promise<json>       done;
     std::atomic<bool>        cancelled{false};   // the client went away: the lane is freed at the next pass
     float                    temp = 0.0f, min_p = 0.05f;   // sampling of this request (temperature 0 = greedy)
+    float                    top_p = 1.0f;                 // version 5: top-p (1 = off; needs patch_ztopp in llama.dll)
     uint32_t                 seed = 0;
+    // version 5: 0 high, 1 normal, 2 low. A waiting request goes before those of a lower priority, and of the long
+    // prompts being read, the one of the highest priority that came first is read first (see the bulk passes)
+    int                      prio = 1;
+    std::string              tag;                // a client's name for it: POST /cancel {"tag"} ends every request with this tag
 
     // streaming: the engine thread appends the text of every token, the connection thread takes it away
     bool                     stream = false;
@@ -250,6 +280,7 @@ struct Engine {
     int                 trickle = 96;     // prompts up to this many tokens are fed one token per pass ...
     bool                alone_bulk = true; // ... unless their lane is the only one with a request (--alone-bulk 0: always)
     int                 n_busy = 0;       // lanes with a request, counted before every pass
+    std::atomic<int>    busy_now{0};      // version 5: the same, for /stats (the count above is made in place)
     int                 narrow_wait = 8;  // passes in a row a narrower width would have covered before the pass narrows (--narrow-wait;
                                           // 48 before 20 Nov: 150 requests of 60-250 tokens took 14.6 s, with 8 14.3 s)
     int                 few_bulk = 8;     // ... "alone": this many lanes with a request or fewer (--few-bulk; a bulk pass costs the
@@ -309,6 +340,61 @@ struct Engine {
     std::condition_variable              cv;
     std::deque<std::shared_ptr<Request>> queue;
     std::atomic<bool>                    stop{false};
+    // version 5: the requests not yet ended, for POST /cancel {"tag"}
+    std::vector<std::weak_ptr<Request>>  live;
+
+    // under mu: a request joins the queue before every request of a lower priority (0 high .. 2 low), after its equals
+    void queue_add(const std::shared_ptr<Request> & r) {
+        auto it = queue.end();
+        while (it != queue.begin() && (*std::prev(it))->prio > r->prio) { --it; }
+        queue.insert(it, r);
+        if (live.size() >= 512) {
+            std::vector<std::weak_ptr<Request>> keep;
+            for (auto & w : live) { if (!w.expired()) { keep.push_back(w); } }
+            live.swap(keep);
+        }
+        live.push_back(r);
+    }
+
+    // every request with this tag ends: a waiting one at once, one in a lane at the next pass (also while it reads)
+    int cancel_tag(const std::string & tag) {
+        int n = 0;
+        if (tag.empty()) { return 0; }
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            for (auto & w : live) {
+                auto r = w.lock();
+                if (r && r->tag == tag && !r->cancelled) { r->cancelled = true; n++; }
+            }
+        }
+        wake = true;
+        cv.notify_one();
+        return n;
+    }
+
+    // a request that ends before it had a lane (cancelled while it waited): answered as one cancelled in a lane
+    void abandon(const std::shared_ptr<Request> & r) {
+        if (r->fork_src >= 0) {
+            std::lock_guard<std::mutex> lk(mu);
+            if (r->fork_src < (int) vault.size()) {
+                Slot & s = vault[r->fork_src];
+                s.refs--;
+                if (s.refs <= 0 && !s.user) { s.freeing = true; }
+            }
+        }
+        json j = {{"content", ""}, {"stop", "cancelled"}, {"tokens_predicted", 0}, {"tokens_evaluated", 0},
+                  {"timings", {{"queue_ms", now_ms() - r->t_arrive}, {"prompt_ms", 0.0}, {"predicted_ms", 0.0}, {"predicted_per_second", 0.0}}},
+                  {"fed_bytes", 0}};
+        if (r->group) {
+            { std::lock_guard<std::mutex> lk(r->group->mu); r->group->finals[r->branch] = j; r->group->n_done++; }
+            r->group->cv.notify_all();
+        } else if (r->stream) {
+            { std::lock_guard<std::mutex> lk(r->smu); r->final = j; r->sdone = true; }
+            r->scv.notify_one();
+        }
+        r->done.set_value(std::move(j));
+        n_done++;
+    }
 
     // statistics
     std::atomic<long long> n_pass{0}, n_tokens{0}, n_prompt{0}, n_done{0}, n_prefill{0}, n_forks{0}, n_moves{0};
@@ -472,6 +558,7 @@ struct Engine {
         while (!stop) {
             run_jobs();
             int need = 0;
+            std::vector<std::shared_ptr<Request>> gone;
             {
                 std::unique_lock<std::mutex> lk(mu);
                 for (size_t k = 0; k < vault.size(); ++k) {     // sessions nobody needs any more
@@ -484,9 +571,14 @@ struct Engine {
                 bool active = false;
                 for (auto & l : L) { active = active || l.req; }
                 if (!active && queue.empty()) {
+                    busy_now = 0;
                     cv.wait(lk, [&] { return stop || !queue.empty() || wake; });
                     if (stop) { break; }
                     if (wake.exchange(false) && queue.empty()) { continue; }
+                }
+                // version 5: requests cancelled while they waited leave the queue (answered after the lock, see abandon)
+                for (auto it = queue.begin(); it != queue.end();) {
+                    if ((*it)->cancelled) { gone.push_back(*it); it = queue.erase(it); } else { ++it; }
                 }
                 std::vector<std::pair<int, int>> forks;     // (session, lane)
                 for (auto & l : L) {                       // the lowest free lanes first, so that the pass stays narrow
@@ -498,7 +590,7 @@ struct Engine {
                         for (size_t k = 0; k < l.req->prompt.size() && k < 40; ++k) { l.head += piece(l.req->prompt[k]); }
                         l.t_start = now_ms(); l.t_prompt = 0;
                         if (fused) {
-                            llama_fq_set_sampling((int32_t) (&l - L.data()), l.req->temp, l.req->min_p, l.req->seed);
+                            set_sampling((int32_t) (&l - L.data()), l.req->temp, l.req->min_p, l.req->top_p, l.req->seed);
                             l.samp = l.req->temp > 0.0f;
                         }
                         if (l.req->fork_src >= 0) { forks.push_back({l.req->fork_src, l.idx}); }
@@ -525,6 +617,15 @@ struct Engine {
             for (auto & l : L) {
                 if (l.failed) { l.failed = false; l.text = "[the session could not be copied]"; l.t_prompt = now_ms(); finish(l, "error"); l.clear = true; }
             }
+            // version 5: a cancelled request frees its lane now, also while its prompt is still being read (before, it
+            // was noticed only after its next written token: a client that went away during a long read held the lane
+            // until the whole prompt was read)
+            for (auto & r : gone) { abandon(r); }
+            for (auto & l : L) {
+                if (l.req && l.req->cancelled) { l.t_prompt = l.t_prompt ? l.t_prompt : now_ms(); finish(l, "cancelled"); l.clear = true; }
+            }
+            need = 0;
+            for (int i = 0; i < lanes; ++i) { if (L[i].req) { need = i + 1; } }
 
             // version 2: when the lanes still at work would fit a narrower pass, the upper ones move down (their memory is
             // copied on the card, a few milliseconds) and the pass narrows at once instead of dragging idle lanes along
@@ -547,7 +648,7 @@ struct Engine {
                         b.n_fed = a.n_fed; b.n_gen = a.n_gen; b.pos = a.pos; b.last = a.last; b.clear = a.clear; b.expects = a.expects;
                         b.text = std::move(a.text); a.text.clear(); b.toks = std::move(a.toks); a.toks.clear(); b.head = a.head; b.t_start = a.t_start; b.t_prompt = a.t_prompt; b.own = a.own; b.fed_bytes = a.fed_bytes;
                         if (fused) {
-                            llama_fq_set_sampling(j, b.req->temp, b.req->min_p, b.req->seed + (uint32_t) b.n_gen);
+                            set_sampling(j, b.req->temp, b.req->min_p, b.req->top_p, b.req->seed + (uint32_t) b.n_gen);
                             b.samp = b.req->temp > 0.0f;
                         }
                         llama_memory_seq_rm(mem, i, -1, -1);
@@ -574,10 +675,15 @@ struct Engine {
             // one bulk pass for one of the lanes that read a long prompt, in turn
             n_busy = 0;
             for (int i = 0; i < W; ++i) { n_busy += L[i].req ? 1 : 0; }
+            busy_now = n_busy;
+            // version 5: the prompt of the highest priority that came first, read to its end before the next one. (Taking
+            // the readers in turn, four 2,400-token prompts sent together all started writing at about 2.8 s, where one
+            // alone starts at 0.7 s; one after another, the first starts at 0.7 s and the last no later than before.)
             int reader = -1;
-            for (int k = 0; k < W; ++k) {
-                const int i = (rr + k) % W;
-                if (bulk_left(L[i]) > 0) { reader = i; break; }
+            for (int i = 0; i < W; ++i) {
+                if (bulk_left(L[i]) == 0) { continue; }
+                if (reader < 0 || L[i].req->prio < L[reader].req->prio
+                    || (L[i].req->prio == L[reader].req->prio && L[i].req->t_arrive < L[reader].req->t_arrive)) { reader = i; }
             }
             if (reader >= 0) {
                 rr = reader + 1;
@@ -726,6 +832,7 @@ static std::string chatml(const json & messages, bool thinking) {
 static std::string g_model_id = "local";   // the loaded model's file name, for the OpenAI-style answers
 
 int main(int argc, char ** argv) {
+    find_top_p();                                   // version 5: llama_fq_set_sampling_p, when our llama.dll has it
     std::string model_path;
     int lanes = 64, ctx_lane = 384, port = 11832, threads = 4, trickle = 96, kvu = 1, top_k = 40, state_bits = 16, chunk = 512;
     bool alone_bulk = true;
@@ -1034,6 +1141,9 @@ int main(int argc, char ** argv) {
         if (r->fork_src >= 0) {
             std::lock_guard<std::mutex> lk(eng.mu);
             if (r->fork_src >= (int) eng.vault.size() || !eng.vault[r->fork_src].used || eng.vault[r->fork_src].freeing) { err = "no such session"; return nullptr; }
+            // version 5: text that continues a parked state does not begin with the start-of-text token (a model that adds
+            // one, Gemma, was given it again in the middle of the conversation)
+            if (!toks.empty() && llama_vocab_get_add_bos(eng.vocab) && toks[0] == llama_vocab_bos(eng.vocab)) { toks.erase(toks.begin()); }
             if (eng.vault[r->fork_src].pending >= 0) { toks.insert(toks.begin(), eng.vault[r->fork_src].pending); }
             if (toks.empty()) { err = "nothing to read"; return nullptr; }
             if ((int) toks.size() + 1 >= (r->read_only ? std::max(8 * eng.ctx_lane, eng.ctx_extra) : 1 * eng.ctx_lane)) { err = "the prompt does not fit the lane context"; return nullptr; }
@@ -1052,9 +1162,18 @@ int main(int argc, char ** argv) {
         // prompts sent with one seed do not share their random numbers (measured: shared numbers cost 5 of 300
         // answers at temperature 0.7, because the unlucky draws then hit every request at once)
         for (llama_token t : r->prompt) { r->seed = (r->seed ^ (uint32_t) t) * 16777619u; }
+        // version 5: top_p, priority ("high" | "normal" | "low", or 0 | 1 | 2) and a tag for POST /cancel
+        r->top_p = (float) std::min(1.0, std::max(0.0, number(body, "top_p", 1.0)));
+        if (r->top_p <= 0.0f) { r->top_p = 1.0f; }
+        if (body.contains("priority")) {
+            const json & p = body["priority"];
+            if (p.is_string()) { const std::string s = p.get<std::string>(); r->prio = s == "high" ? 0 : s == "low" ? 2 : 1; }
+            else if (p.is_number_integer()) { r->prio = std::max(0, std::min(2, p.get<int>())); }
+        }
+        r->tag = body.contains("tag") && body["tag"].is_string() ? body["tag"].get<std::string>() : std::string();
         {
             std::lock_guard<std::mutex> lk(eng.mu);
-            eng.queue.push_back(r);
+            eng.queue_add(r);
         }
         eng.cv.notify_one();
         return r;
@@ -1074,11 +1193,15 @@ int main(int argc, char ** argv) {
     });
     svr.Get("/stats", [&](const httplib::Request &, httplib::Response & res) {
         const long long np = eng.n_pass;
+        int queued = 0;
+        { std::lock_guard<std::mutex> lk(eng.mu); queued = (int) eng.queue.size(); }
         json s = {{"lanes", eng.lanes}, {"width", (int) eng.width}, {"prefill_passes", (long long) eng.n_prefill}, {"passes", np}, {"mean_pass_ms", np ? eng.ms_pass / np : 0.0}, {"generated_tokens", (long long) eng.n_tokens},
                   {"prompt_tokens", (long long) eng.n_prompt}, {"requests_done", (long long) eng.n_done},
                   {"sessions", (int) eng.n_sessions}, {"session_slots", (int) eng.vault.size()}, {"forks", (long long) eng.n_forks}, {"moves", (long long) eng.n_moves},
                   {"model", model_path}, {"vision", eng.mctx != nullptr}, {"ctx_lane", eng.ctx_lane}, {"ctx_extra", eng.ctx_extra}, {"spec_ctx", spec.tgt ? spec_ctx : 0}, {"spec_batch", spec.n_batch}, {"spec_slots", 4},
                   {"vault", (int) eng.vault.size()},
+                  // version 5: lanes with a request now, requests waiting for a lane, whether top_p is applied
+                  {"busy", (int) eng.busy_now}, {"queued", queued}, {"top_p", g_set_sampling_p != nullptr},
                   // "spec": /spec exists (tokens drafted per cycle at most); "spec_mtp" / "spec_lookup": by which drafter
                   {"spec", spec.tgt ? std::max(spec.n_draft, spec.n_lookup) : 0}, {"spec_mtp", spec.n_draft}, {"spec_lookup", spec.n_lookup},
                   {"spec_answers", (long long) spec.n_answers}, {"spec_tokens", (long long) spec.n_tokens},
@@ -1620,10 +1743,54 @@ int main(int argc, char ** argv) {
                 return;
             }
         }
+        if (body.value("stream", false)) {
+            // version 5: the answer as server-sent events in /fork's form, one branch: {"rows": [[0, "text"]]} as it is
+            // written, then {"done": [result], "timings": {...}} and [DONE]. Closing the connection cancels it.
+            auto r = enqueue(eng.tokenize(body["prompt"].get<std::string>()), body.value("n_predict", body.value("max_tokens", 200)), true, err, body);
+            if (!r) { res.status = 400; res.set_content(json({{"error", err}}).dump(), "application/json"); return; }
+            const double t0 = now_ms();
+            auto buf = std::make_shared<std::string>();
+            res.set_chunked_content_provider("text/event-stream",
+                [r, buf, t0](size_t, httplib::DataSink & sink) {
+                    std::string add; bool done; json fin;
+                    {
+                        std::unique_lock<std::mutex> lk(r->smu);
+                        // (woken every 200 ms: a client that went away while the prompt is read is noticed then)
+                        r->scv.wait_for(lk, std::chrono::milliseconds(200), [&] { return !r->fresh.empty() || r->sdone; });
+                        add.swap(r->fresh);
+                        done = r->sdone;
+                        if (done) { fin = r->final; }
+                    }
+                    if (!sink.is_writable()) { r->cancelled = true; return false; }
+                    *buf += add;
+                    const size_t w = done ? buf->size() : utf8_whole(*buf);
+                    if (w > 0) {
+                        const std::string line = "data: " + json({{"rows", json::array({json::array({0, buf->substr(0, w)})})}}).dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n";
+                        buf->erase(0, w);
+                        if (!sink.write(line.data(), line.size())) { r->cancelled = true; return false; }
+                    }
+                    if (done) {
+                        json c = {{"done", json::array({fin})}, {"timings", {{"total_ms", now_ms() - t0}}}};
+                        const std::string line = "data: " + c.dump(-1, ' ', false, json::error_handler_t::replace) + "\n\ndata: [DONE]\n\n";
+                        sink.write(line.data(), line.size());
+                        sink.done();
+                    }
+                    return true;
+                },
+                [r](bool success) { if (!success) { r->cancelled = true; } });
+            return;
+        }
         if (!submit(eng.tokenize(body["prompt"].get<std::string>()), body.value("n_predict", body.value("max_tokens", 200)), out, err, body)) {
             res.status = 400; res.set_content(json({{"error", err}}).dump(), "application/json"); return;
         }
         res.set_content(out.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
+    });
+    // version 5: POST /cancel {"tag": "..."}: every request sent with this tag ends (one waiting at once, one in a lane at
+    // the next pass, also while its prompt is read) and answers with stop "cancelled". -> {"cancelled": n}
+    svr.Post("/cancel", [&](const httplib::Request & req, httplib::Response & res) {
+        json body = json::parse(req.body, nullptr, false);
+        const std::string tag = (!body.is_discarded() && body.contains("tag") && body["tag"].is_string()) ? body["tag"].get<std::string>() : std::string();
+        res.set_content(json({{"cancelled", eng.cancel_tag(tag)}}).dump(), "application/json");
     });
     svr.Post("/v1/chat/completions", [&](const httplib::Request & req, httplib::Response & res) {
         json body = json::parse(req.body, nullptr, false);

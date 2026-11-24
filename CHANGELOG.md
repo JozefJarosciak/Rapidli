@@ -1,5 +1,42 @@
 # Changelog
 
+## API for programs that send many related requests (24 Nov 2026)
+
+For live copilots, agents and document tools (docs/API.md › Many related requests; README › The API):
+
+- **Plain mode** (`"mode": "plain"` on `/v1/chat/completions`): the messages in the model's own chat format (ChatML,
+  Gemma 4, Inkling), the whole system prompt uncut as a system turn at the front, one lane per request streamed token
+  by token, no planner, notes, look-ups or layout. `max_tokens`, `temperature`, `top_p`, `min_p`, `stop`, `seed`;
+  a reply longer than a lane goes on from the lane's parked state; a prompt longer than a lane is read into a parked
+  state first; `finish_reason` (`length` when cut) and real token counts; failures as an error event; `image_url`
+  parts read when the model sees images; not kept as a chat unless `"store": true`. Plain requests are not held back
+  by `parallel_max` (their own limit: `api.plain_max`, none by default). A model load stops them and waits for them.
+- **Contexts** (`/api/v1/contexts`, `/append`, `/fork`, `GET`, `DELETE`): text read once into a parked state; a
+  request with `"context"` starts from a copy and reads only its new messages, leaving the context unchanged. The last
+  message stays open, so appended text goes into it; an append makes a new state and running requests keep the old
+  one. The app's clean-up (`Fan.free_slots`, `heal`) never releases a context's state (`fan.PINNED`); an expired,
+  deleted or reloaded-away context answers 404, a full one 413, one too many 429. `app/plain.py`.
+- **Priority** (`"priority": "high" | "normal" | "low"`): the engine lets waiting requests in by priority, and of the
+  long prompts being read it reads the highest priority's first one to its end before the next, instead of in turns
+  (four 2,400-token prompts sent together had all started writing at about 2.8 s; one alone starts at 0.7 s).
+- **Batches** (`POST /api/v1/batch`): many replies from one context on one connection of server-sent events
+  (`{id, delta}`, `{id, done, finish_reason, usage}`), each cancellable by its id (`/api/v1/batch/{batch}/cancel`).
+- **Load options** (`POST /api/v1/models/load`): `lanes` (a maximum), `context`, `margin_mb`, `vision`, `drafting`
+  for that load only, kept by refits; a fit with a lane maximum is kept apart (`fit.fit_key`).
+- **Status**: `GET /api/v1/status` adds free and busy lanes, queued requests, the context limit and the contexts'
+  use, free places for parked states, vision, the chat format, top_p, the card's memory and a load's progress;
+  `GET /api/v1/status/events` sends it whenever it changes.
+- **JSON replies** (`response_format`: `json_object`, `json_schema`): the reply is opened with `{`, ends when the
+  object closes, and is checked (JSON, then the schema); written again twice at most, then 422.
+- Engine (`engine.cpp`, version 5): `priority`, `tag` and `POST /cancel {"tag"}`; a cancelled request leaves its lane
+  at the next pass also while its prompt is still read (it was noticed only after its next written token), and one
+  cancelled while it waited leaves the queue; `"stream": true` on `/completion`; `top_p` through
+  `llama_fq_set_sampling_p` when `llama.dll` has it (new `engine/llama/patch_ztopp.py` and
+  `engine/cuda/patch_ztopp.py`: top-p in the fused sampling kernel); text that continues a parked state no longer
+  starts with a second start-of-text token (Gemma); `/stats` adds `busy`, `queued`, `top_p`.
+- Settings › API shows plain mode and contexts with an example. `tests/test_plain_api.py` (offline, a fake engine)
+  covers the routes; it is in `tests/run_offline`.
+
 ## 0.9.1: only the driver to install, fixes from a fresh install (24 Nov 2026)
 
 - The engine downloads carry the CUDA libraries they use, so the CUDA Toolkit (about 3 GB) is no longer needed: only

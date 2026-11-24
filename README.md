@@ -43,6 +43,7 @@ writing **one** answer. One lane alone writes about 45 to 220 tokens a second on
 8. [First start](#first-start)
 9. [Features](#features)
 10. [The API](#the-api)
+    - [For programs that send many related requests](#for-programs-that-send-many-related-requests)
 11. [Tested on](#tested-on)
 12. [Limits](#limits)
 13. [Trouble](#trouble)
@@ -304,7 +305,7 @@ and [docs/BUILDING.md](docs/BUILDING.md) lists every patch and what it changes.
 | **Conversations** | Kept as JSON in `data/chats`. A long conversation is read once and parked on the card, so a follow-up reads only the new turn. Edit a question, write an answer again, switch versions, put chats in folders. Deleted chats go to a trash for 30 days. |
 | **Several questions at once** | Ask in another chat while an answer is being written: side by side on the free lanes (up to 4 answers), or one after another. |
 | **Top 10** | The fastest answers by tokens a second, best second, first words, length and lanes, each with its question and settings. A click asks it again. |
-| **API** | Load and unload models, and ask with every choice of the composer: length, thinking, offline Wikipedia, web search, deep research. `POST /v1/chat/completions` (OpenAI-style, streamed or not) and Rapidli's own `POST /api/v1/ask`. Off until switched on; with a key. The full documentation opens in Settings › API. |
+| **API** | Load and unload models, and ask with every choice of the composer: length, thinking, offline Wikipedia, web search, deep research. `POST /v1/chat/completions` (OpenAI-style, streamed or not) and Rapidli's own `POST /api/v1/ask`. For copilots and agents: plain mode, contexts read once and used by many requests, priorities, batches and JSON replies. Off until switched on; with a key. The full documentation opens in Settings › API. |
 
 **What leaves your computer:** your conversations never do. Rapidli goes online only for what you ask of it: web
 search sends the search words to the search engines (and, when you ask to see something, fetches the pictures it found); Get models and Offline Wikipedia ask huggingface.co and
@@ -334,6 +335,29 @@ curl http://127.0.0.1:11842/api/v1/ask -H "Authorization: Bearer <key>" -H "Cont
 
 The answer comes with the speed, the lanes and the route. Every route, option and answer: [docs/API.md](docs/API.md),
 also shown in the app (Settings › API › Open the full API documentation).
+
+### For programs that send many related requests
+
+Live copilots, agents and document tools ask many questions about the same text, often at once. For them
+([docs/API.md › Many related requests](docs/API.md#many-related-requests)):
+
+| | |
+|---|---|
+| **Plain mode** | `"mode": "plain"` on `/v1/chat/completions`: the messages as they are, the whole system prompt at the front in the model's own chat format, one lane per request, streamed token by token. `max_tokens`, `temperature`, `top_p`, `stop` and `seed` are honoured, a reply can be longer than a lane, `finish_reason` and `usage` are real, errors come as error events, closing the connection frees the lane at once (also while the prompt is read), images are read when the model sees them, and nothing is kept as a chat. Not held back by the limit on answers at once. |
+| **Contexts** | `POST /api/v1/contexts` reads a long text once (a system prompt, a document, a transcript); every request that names it reads only its own new messages. Text is appended as it grows, a context can be forked, and running requests keep the state they started from. The app never lets one go on its own; one that expired answers `404`. |
+| **Priority** | `"priority": "high"`: that prompt is read first; within one priority a prompt is read to its end before the next, so the first request starts writing as soon as its own prompt is read. |
+| **Batches** | `POST /api/v1/batch`: many replies from one context on one connection, each cancellable by its id. |
+| **Load options** | `POST /api/v1/models/load` with `lanes` (a maximum), `context`, `margin_mb`, `vision` and `drafting`, for that load only. |
+| **Status** | `GET /api/v1/status`: free lanes, the context limit and use, free places for contexts, vision, the chat format, the card's memory, a load's progress; `GET /api/v1/status/events` sends it whenever it changes. |
+| **JSON** | `response_format` (`json_object`, `json_schema`): the reply is checked, and written again when it does not parse or match. |
+
+```sh
+curl http://127.0.0.1:11842/api/v1/contexts -H "Authorization: Bearer <key>" -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "system", "content": "Answer questions about this contract: ..."}]}'
+# -> {"id": "ctx-…", "tokens": 5210, "limit": 32768, ...}
+curl -N http://127.0.0.1:11842/v1/chat/completions -H "Authorization: Bearer <key>" -H "Content-Type: application/json" \
+  -d '{"context": "ctx-…", "stream": true, "priority": "high", "messages": [{"role": "user", "content": "Who signed it?"}]}'
+```
 
 ## Tested on
 

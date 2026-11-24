@@ -225,10 +225,11 @@ def load_fits():
         return {}
 
 
-def fit_key(path, mtp=False, ctx_extra=8192, mmproj=None, margin=1200):
-    """The key under which a fit of these settings is kept in data/fit.json."""
+def fit_key(path, mtp=False, ctx_extra=8192, mmproj=None, margin=1200, lanes_max=None):
+    """The key under which a fit of these settings is kept in data/fit.json (one with a lane maximum from the API is
+    kept apart: it must not cap the model's own fit)."""
     return (f"{path}|{os.path.getsize(path)}|{ctx_extra}|{bool(mtp)}" + ("|vision" if mmproj else "") + (f"|margin{margin}" if margin != 1200 else "")
-            + (f"|lookup{LOOKUP}" if LOOKUP else ""))
+            + (f"|lookup{LOOKUP}" if LOOKUP else "") + (f"|max{int(lanes_max)}" if lanes_max else ""))
 
 
 def reuses(key, fresh=False, lanes_fixed=None):
@@ -565,8 +566,10 @@ def probe_budget(path, common, margin, mmproj=None, lanes=8):
     return out
 
 
-def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=print, kv=None, fresh=False, ctx_max=262144, mmproj=None, lanes_fixed=None, note=None):
-    """Starts the engine on `path` with as many lanes as fit (or lanes_fixed, when the user set a number).
+def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=print, kv=None, fresh=False, ctx_max=262144, mmproj=None, lanes_fixed=None, note=None,
+        lanes_max=None):
+    """Starts the engine on `path` with as many lanes as fit (or lanes_fixed, when the user set a number; at most
+    lanes_max, when the API's load asks for a maximum).
     mmproj: the vision projector to load with the model.
     vault: parked states the engine can hold at once (RAPIDLI_VAULT): many lanes that each go on past their own
     ~300 tokens keep their state parked rather than reading the prompt again (~6 MB a slot on a 35B).
@@ -599,14 +602,15 @@ def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=p
     common = dict(ctx=CTX, state=8, vault=vault, chunk=chunk, port=port, model=path, ctx_extra=8192 if auto else int(ctx_extra),
                   **({"kv": kv} if kv else {}), **spec)
     fits = load_fits()
-    key = fit_key(path, mtp, ctx_extra, mmproj, margin)
+    key = fit_key(path, mtp, ctx_extra, mmproj, margin, lanes_max)
+    cap = (lambda n: max(8, min(int(n), int(lanes_max)))) if lanes_max else (lambda n: n)
     # a mixture of experts larger than the card: its experts in the PC's memory (fitted every time it loads: what the
     # card and the PC's memory have free decides the cache)
     sp = moe_split(path, margin)
     if sp:
         if auto:
             common["ctx_extra"] = 16384
-        return fit_moe(path, sp, common, margin, port, say, note, lanes_fixed, key)
+        return fit_moe(path, sp, common, margin, port, say, note, cap(lanes_fixed or MOE_LANES) if lanes_max else lanes_fixed, key)
     # 0. a model fitted before: start with its lanes and check that nothing spilled
     if reuses(key, fresh, lanes_fixed):
         f0 = fits[key]
@@ -696,7 +700,7 @@ def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=p
     # (a lane takes about a quarter more than its states: the engine's buffers grow with the lane count. Without it the
     # first start spilled every time and was found out minutes later: 195 lanes counted where 156 fit, 138 for 110,
     # 78 for 66, 19 Nov)
-    lanes_for = lambda c: int(min(MAX_SEQ - vault, 8 + max(0, free - (c - probe_ctx) * per_cell) // max(1.0, per_lane * LANE_EXTRA)))
+    lanes_for = lambda c: cap(int(min(MAX_SEQ - vault, 8 + max(0, free - (c - probe_ctx) * per_cell) // max(1.0, per_lane * LANE_EXTRA))))
     if auto:
         fitting = [c for c in contexts if lanes_for(c) >= AUTO_MIN_LANES] or [8192]
         common["ctx_extra"] = max(fitting)

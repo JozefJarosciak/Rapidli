@@ -10,7 +10,7 @@ if [ -z "$PY" ]; then                      # (python3, else python, else py: Git
 fi
 [ -n "$PY" ] || { echo "Python 3.10 or newer was not found (set PYTHON=...)"; exit 1; }
 failed=0
-for t in test_rich_points test_together test_stuck test_sizing_notes test_hub_split test_fetch test_kiwix_names test_revise; do
+for t in test_rich_points test_together test_stuck test_sizing_notes test_hub_split test_fetch test_kiwix_names test_revise test_plain_api; do
     out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONIOENCODING=utf8 "$PY" "tests/$t.py" 2>&1)
     last=$(printf '%s\n' "$out" | tail -n 1)
     case "$last" in

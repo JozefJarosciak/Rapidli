@@ -28,6 +28,8 @@ DEFAULTS = {
         "together": "parallel",        # "parallel" or "queue", as for the page
         "parallel_max": 4,
         "folder": True,                # the API's conversations are kept in an "API" folder of the chat list
+        "plain_max": 0,                # plain requests and batches written at once (0: no limit of their own; the engine's lanes)
+        "contexts_max": 0,             # contexts kept at once (0: the engine's parked-state slots less those the app needs)
     },
     "engine": {
         "context": "auto",             # conversation context per model: "auto" or tokens (also set from the context ring)

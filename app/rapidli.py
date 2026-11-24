@@ -21,6 +21,8 @@ import base64, hashlib, hmac, random, secrets, urllib.parse
 import eng, fit, models, sizing, settings, search, system, downloads, codecheck, codelanes, smoke, pagelanes
 import kiwix, lint, plat, signal, searchlog, socket
 import fan as fanmod
+import plain as plainmod
+import select
 from fan import Fan, Stopped
 
 WEB = os.path.join(HERE, "web")
@@ -83,24 +85,25 @@ class Gate:
         self.cv = threading.Condition()
         self.waiting, self.running = [], []
         self.excl, self.want_excl = False, 0
+        self.plain = set()                    # the API's plain requests and batches being written (their cancel events)
         self.expect = dict(self.EXPECT)
 
     # ---- as a lock: the engine alone
     def locked(self):
         with self.cv:
-            return self.excl or bool(self.running)
+            return self.excl or bool(self.running) or bool(self.plain)
 
     def acquire(self, blocking=True, timeout=-1):
         end = None if timeout is None or timeout < 0 else time.time() + timeout
         with self.cv:
             if not blocking:
-                if self.excl or self.running:
+                if self.excl or self.running or self.plain:
                     return False
                 self.excl = True
                 return True
             self.want_excl += 1               # no new answer starts meanwhile
             try:
-                while self.excl or self.running:
+                while self.excl or self.running or self.plain:
                     left = None if end is None else end - time.time()
                     if left is not None and left <= 0:
                         return False
@@ -216,7 +219,28 @@ class Gate:
         return n
 
     def stop_all(self):
+        with self.cv:
+            for c in list(self.plain):        # (the API's plain requests too: a load waits for them)
+                c.set()
         return self.stop()
+
+    # ---- the API's plain requests and batches (app/plain.py): one lane each, no place in line, not held back by
+    # parallel_max (a limit of their own: Settings' api.plain_max, 0 = none). A load or a refit waits for them as for
+    # answers, and stops them first.
+    def plain_enter(self, cancel, cap=0, wait=120.0):
+        end = time.time() + wait
+        with self.cv:
+            while self.excl or self.want_excl or (cap and len(self.plain) >= cap):
+                if time.time() > end or cancel.is_set():
+                    return False
+                self.cv.wait(0.5)
+            self.plain.add(cancel)
+            return True
+
+    def plain_exit(self, cancel):
+        with self.cv:
+            self.plain.discard(cancel)
+            self.cv.notify_all()
 
     def state(self):
         """-> what the page and the API show: the answers being written and the ones waiting"""
@@ -331,6 +355,7 @@ def record_top(rec):
 
 
 GATE = Gate()
+BATCHES = {}              # the API's batches being written: batch id -> {request id: its cancel event} (POST .../cancel)
 STATE = {"engine_port": 11832, "status": "starting", "message": "starting", "model": None, "fit": {}, "fan": None,
          "busy": GATE, "switch": threading.Lock(), "models": [], "started_engine": False}
 
@@ -448,6 +473,31 @@ def api_options(b, cfg):
     if deep and not (web or (wiki and kiwix_files(cfg))):
         return None, 'deep: needs the web ("web": true) or offline Wikipedia (installed in Rapidli: Settings > Offline Wikipedia)'
     return {"size": size, "think": think, "search": web, "kiwix": wiki, "first": first, "deep": deep}, None
+
+
+def load_options(b):
+    """POST /api/v1/models/load's options for this load only (the settings stay as they are). -> (options, None) or
+    (None, what is wrong)"""
+    o = {}
+    if b.get("lanes") is not None:
+        if not isinstance(b["lanes"], int) or not 1 <= b["lanes"] <= 256:
+            return None, "lanes: the most lanes, a whole number from 1 to 256 (at least 8 are started)"
+        o["lanes"] = b["lanes"]
+    if b.get("context") is not None:
+        c = b["context"]
+        if not (c == "auto" or (isinstance(c, int) and 2048 <= c <= 1048576)):
+            return None, 'context: "auto" or tokens of conversation context (2048 or more)'
+        o["context"] = c
+    if b.get("margin_mb") is not None:
+        if not isinstance(b["margin_mb"], int) or not 0 <= b["margin_mb"] <= 32000:
+            return None, "margin_mb: graphics memory left free, MB (0 to 32000)"
+        o["margin_mb"] = b["margin_mb"]
+    for k in ("vision", "drafting"):
+        if b.get(k) is not None:
+            if not isinstance(b[k], bool):
+                return None, k + ": true or false"
+            o[k] = b[k]
+    return o, None
 
 
 def api_model(m):
@@ -617,8 +667,14 @@ def watch_load(ld, m):
             ld["phase"] = "setting up the lanes' memory"
 
 
-def load_model(m, fresh=False, why=None):
-    """Runs in its own thread: stops the engine, fits and starts it on model m. why: shown while the engine stops."""
+def load_model(m, fresh=False, why=None, opts="keep"):
+    """Runs in its own thread: stops the engine, fits and starts it on model m. why: shown while the engine stops.
+    opts: the API's options for this load (POST /api/v1/models/load: "lanes" as a maximum, "context", "margin_mb",
+    "vision", "drafting"), used instead of the settings and not saved in them; None = the settings; "keep" = the options
+    of the last load of this same model (a refit or a reload after a crash keeps them, a load the user asks for not)."""
+    if opts == "keep":
+        opts = STATE.get("load_opts") if STATE.get("load_opts_model") == m.get("id") else None
+    opts = dict(opts or {})
     with STATE["switch"]:
         if STATE["busy"].locked():
             GATE.stop_all()
@@ -630,15 +686,21 @@ def load_model(m, fresh=False, why=None):
             print("load_model: the answer did not stop; stopping the engine", flush=True)
             eng.stop(STATE["engine_port"])
         with STATE["busy"]:
-            STATE.update(status="loading", model=m, message=why or "stopping the engine", fit={}, load=None, roomy_noted=False)
+            STATE.update(status="loading", model=m, message=why or "stopping the engine", fit={}, load=None, roomy_noted=False,
+                         load_opts=opts or None, load_opts_model=m.get("id"))
             STATE["fan"] = None
+            plainmod.CONTEXTS.clear()             # (the engine is stopped: the API's contexts go with it)
             try:
                 es = settings.load()["engine"]
-                mmproj = m.get("mmproj") if es.get("vision", True) else None
+                mmproj = m.get("mmproj") if opts.get("vision", es.get("vision", True)) else None
                 lanes_fixed = es.get("lanes") if isinstance(es.get("lanes"), int) else None
-                how = dict(mtp=bool(m.get("mtp")) and es.get("drafting", True), ctx_extra=ctx_setting(m), mmproj=mmproj, margin=int(es.get("margin_mb") or 1200))
+                lanes_max = int(opts["lanes"]) if opts.get("lanes") else None
+                if lanes_max and lanes_fixed:         # ("lanes" from the API is a maximum)
+                    lanes_fixed, lanes_max = min(lanes_fixed, lanes_max), None
+                how = dict(mtp=bool(m.get("mtp")) and opts.get("drafting", es.get("drafting", True)), ctx_extra=opts.get("context") or ctx_setting(m),
+                           mmproj=mmproj, margin=int(opts.get("margin_mb") or es.get("margin_mb") or 1200))
                 # the progress bar: the time this load is expected to take, adjusted when fit() has to do more
-                key, gb = fit.fit_key(m["path"], **how), m["bytes"] / 2**30
+                key, gb = fit.fit_key(m["path"], **how, lanes_max=lanes_max), m["bytes"] / 2**30
                 mode = "fixed" if lanes_fixed else "cached" if fit.reuses(key, fresh) else "fit"
                 expected, measured = load_estimate(key, mode, gb)
                 t0 = time.time()
@@ -667,7 +729,7 @@ def load_model(m, fresh=False, why=None):
                 if mmproj:
                     say(f"loading {label(m)} with its vision projector")
                 res = fit.fit(m["path"], port=STATE["engine_port"], say=say, fresh=fresh, ctx_max=m.get("context") or 262144,
-                              lanes_fixed=lanes_fixed, note=note, **how)
+                              lanes_fixed=lanes_fixed, lanes_max=lanes_max, note=note, **how)
                 fn = Fan(STATE["engine_port"])
                 say("reading the layouts")
                 try:                              # at most 30 s per step: the model is usable without it
@@ -821,6 +883,7 @@ def unload_model():
             GATE.stop_all()
         with STATE["busy"]:
             eng.stop(STATE["engine_port"])
+            plainmod.CONTEXTS.clear()
             STATE.update(status="idle", fan=None, fit={}, message="no model loaded")
 
 
@@ -2359,6 +2422,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_error(*bad)
         self.source = "api"
         m = STATE.get("model") or {}
+        if method == "DELETE":
+            if not self.api_plus("DELETE", p, {}):
+                self.api_error("no such path", 404)
+            return
         if method == "GET":
             if p == "/v1/models":                    # (OpenAI's list: the model loaded now)
                 return self.send_json({"object": "list", "data": [{"id": m.get("id"), "object": "model", "owned_by": "rapidli"}]
@@ -2366,10 +2433,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/v1/models":                 # every model on this PC
                 return self.send_json({"models": [api_model(x) for x in (STATE["models"] or model_list())]})
             if p == "/api/v1/status":
-                st = engine_stats() or {}
-                return self.send_json({"status": STATE["status"], "message": STATE["message"], "model": m.get("id"),
-                                       "label": label(m) if m else None, "lanes": st.get("lanes"), "think": think_levels(),
-                                       "answers": GATE.state(), "together": settings.load()["api"].get("together")})
+                return self.send_json(self.api_status_obj())
             if p == "/api/v1/options":                # what an answer can be asked with now
                 kf = kiwix_files(settings.load())
                 return self.send_json({
@@ -2378,8 +2442,12 @@ class Handler(BaseHTTPRequestHandler):
                     "think": [{"value": k, "name": API_THINK.get(k, (k, ""))[0], "what": API_THINK.get(k, ("", ""))[1]} for k in think_levels()],
                     "wiki": {"available": bool(kf), "files": [os.path.basename(f) for f in kf]}, "web": {"available": True},
                     "first": ["wiki", "web"], "deep": {"available": True, "needs": "web or wiki"}})
+            if self.api_plus("GET", p, {}):
+                return
             return self.api_error("no such path", 404)
         b = self.body()
+        if self.api_plus("POST", p, b):
+            return
         if p == "/api/v1/models/load":
             key = str(b.get("model") or b.get("id") or "").strip()
             mm = find_model(key) if key else None
@@ -2389,14 +2457,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_error("no such model: " + key[:200] + " (GET /api/v1/models lists them)", 404)
             if STATE["status"] == "loading":
                 return self.api_error("a model is being loaded", 409)
+            opts, bad = load_options(b)
+            if bad:
+                return self.api_error(bad, 400)
             refit = bool(b.get("refit"))
-            if m.get("id") == mm["id"] and STATE["status"] == "ready" and not refit:
-                return self.send_json({"status": "ready", "model": api_model(mm), "already": True})
-            print(time.strftime("%H:%M:%S"), "load requested:", mm["id"], "refit" if refit else "", "from the API", flush=True)
+            now_opts = STATE.get("load_opts") if STATE.get("load_opts_model") == mm["id"] else None
+            if m.get("id") == mm["id"] and STATE["status"] == "ready" and not refit and (opts or None) == (now_opts or None):
+                return self.send_json({"status": "ready", "model": api_model(mm), "already": True, "load_options": now_opts})
+            print(time.strftime("%H:%M:%S"), "load requested:", mm["id"], "refit" if refit else "", "from the API", opts or "", flush=True)
             if not b.get("wait"):
-                threading.Thread(target=load_model, args=(mm, refit), daemon=True).start()
-                return self.send_json({"status": "loading", "model": api_model(mm)}, 202)
-            load_model(mm, refit)                      # (waits: this request's own thread loads it)
+                threading.Thread(target=load_model, args=(mm, refit, None, opts or None), daemon=True).start()
+                return self.send_json({"status": "loading", "model": api_model(mm), "load_options": opts or None}, 202)
+            load_model(mm, refit, None, opts or None)   # (waits: this request's own thread loads it)
             if STATE["status"] != "ready":
                 return self.api_error("the model did not load: " + str(STATE["message"])[:300], 500)
             st = engine_stats() or {}
@@ -2430,8 +2502,391 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_result(ev, err, lambda msg, st, chat: {"chat": chat, "answer": msg.get("content", ""), "stats": st,
                                                                     "search": msg.get("search") or []})
         if p == "/v1/chat/completions":
+            mode = str(b.get("mode") or "rapidli").lower()
+            if mode not in ("rapidli", "plain"):
+                return self.api_error('mode: "plain" (one lane, the messages as they are) or "rapidli" (the default: planned answers)', 400)
+            rf = b.get("response_format")
+            # (a context, and JSON replies, are plain replies)
+            if mode == "plain" or b.get("context") or (isinstance(rf, dict) and rf.get("type") in ("json_object", "json_schema")):
+                return self.plain_chat(b)
             return self.openai_chat(b)
         return self.api_error("no such path", 404)
+
+    # ---- the API for programs that send many related requests (app/plain.py; docs/API.md): contexts, plain mode,
+    # priorities, batches, the status with its event stream
+    def api_engine(self):
+        plainmod._ENGINE["port"] = STATE["engine_port"]
+        return plainmod.Engine(STATE["engine_port"])
+
+    def api_ready(self):
+        if STATE["status"] != "ready" or STATE["fan"] is None:
+            self.api_error("No model is ready (" + str(STATE["message"] or STATE["status"])[:200] + "): POST /api/v1/models/load", 503)
+            return False
+        return True
+
+    def client_gone(self):
+        """the program that asked has closed its connection (checked without reading anything)"""
+        try:
+            r, _, _ = select.select([self.connection], [], [], 0)
+            if r:
+                return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except Exception:
+            return True
+        return False
+
+    def watch_client(self, cancel, done):
+        """sets `cancel` when the client goes away before `done` is set (a closed connection frees the lane at once, also
+        while the prompt is being read: nothing is written to the client then, so a write cannot notice it)"""
+        def run():
+            while not done.wait(0.1):
+                if self.client_gone():
+                    cancel.set()
+                    return
+        threading.Thread(target=run, daemon=True).start()
+
+    def sse_open(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+    def sse_line(self, obj):
+        self.wfile.write(b"data: " + (obj if isinstance(obj, bytes) else json.dumps(obj, ensure_ascii=False).encode()) + b"\n\n")
+        self.wfile.flush()
+
+    def api_status_obj(self):
+        """GET /api/v1/status (and each event of /api/v1/status/events)"""
+        st = engine_stats() or {}
+        if st and engine_outside():
+            st = {}
+        m = STATE.get("model") or {}
+        f = STATE.get("fit") or {}
+        cfg = settings.load()["api"]
+        ld = STATE.get("load") if STATE["status"] == "loading" else None
+        try:
+            g = (system.info() or {}).get("gpu") or {}
+        except Exception:
+            g = {}
+        lanes, busy = st.get("lanes"), st.get("busy")
+        slots, used = st.get("session_slots"), st.get("sessions")
+        limit = max(st.get("ctx_extra") or 0, 8 * (st.get("ctx_lane") or 300)) if st else None
+        with plainmod.CONTEXTS.lock:
+            ctxs = list(plainmod.CONTEXTS.items.values())
+        cap = int(cfg.get("contexts_max") or 0) or (max(1, (slots or 8) - plainmod.RESERVED_SLOTS) if slots else None)
+        return {"status": STATE["status"], "message": STATE["message"], "model": m.get("id"), "label": label(m) if m else None,
+                "lanes": lanes, "think": think_levels(), "answers": GATE.state(), "together": cfg.get("together"),
+                "lanes_busy": busy, "lanes_free": (lanes - busy) if isinstance(lanes, int) and isinstance(busy, int) else None,
+                "queued": st.get("queued"),
+                "context": {"limit": limit, "lane": st.get("ctx_lane"), "contexts": len(ctxs), "contexts_max": cap,
+                            "contexts_tokens": sum(c.tokens for c in ctxs)},
+                "context_places": {"slots": slots, "used": used, "free": (slots - used) if isinstance(slots, int) and isinstance(used, int) else None},
+                "vision": bool(st.get("vision")), "template": f.get("template") or (fanmod.TPL.get("kind") if st else None),
+                "top_p": bool(st.get("top_p")), "plain_mode": "busy" in st,
+                "plain": {"running": len(GATE.plain), "max": int(cfg.get("plain_max") or 0)},
+                "gpu": {"name": g.get("name"), "total_mb": g.get("total_mb"), "used_mb": g.get("used_mb"),
+                        "free_mb": (g["total_mb"] - g["used_mb"]) if g.get("total_mb") is not None and g.get("used_mb") is not None else None,
+                        "model_mb": f.get("model_mb"), "per_lane_mb": f.get("per_lane_mb")},
+                "load": {"seconds": round(time.time() - ld["t0"], 1), "expected_s": round(ld["expected"], 1),
+                         "fraction": round(min(0.99, (time.time() - ld["t0"]) / max(1.0, ld["expected"])), 2), "phase": ld.get("phase"),
+                         "message": STATE["message"]} if ld else None,
+                "load_options": STATE.get("load_opts") if STATE.get("load_opts_model") == m.get("id") else None}
+
+    def status_events(self):
+        """GET /api/v1/status/events: the status at once, then again whenever it changes (looked at twice a second); a
+        comment line every 15 s keeps the connection open."""
+        self.sse_open()
+        last, t_ping = None, time.time()
+        try:
+            while True:
+                s = self.api_status_obj()
+                g = s["gpu"]
+                key = json.dumps([s["status"], s["message"], s["model"], s["lanes"], s["lanes_busy"], s["queued"], s["context"], s["context_places"],
+                                  s["plain"], (s["load"] or {}).get("fraction"), round((g.get("used_mb") or 0) / 256), s["answers"]], default=str)
+                if key != last:
+                    self.sse_line(s)
+                    last, t_ping = key, time.time()
+                elif time.time() - t_ping > 15:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    t_ping = time.time()
+                time.sleep(0.5)
+        except Exception:
+            return
+
+    def api_plus(self, method, p, b):
+        """The routes of app/plain.py. -> True when it answered"""
+        if p == "/api/v1/status/events" and method == "GET":
+            self.status_events()
+            return True
+        try:
+            if p == "/api/v1/contexts" or p.startswith("/api/v1/contexts/"):
+                parts = p.strip("/").split("/")          # api v1 contexts [id] [append | fork]
+                cid = parts[3] if len(parts) > 3 else None
+                act = parts[4] if len(parts) > 4 else None
+                if method == "GET" and cid is None:
+                    limit = plainmod.limits(self.api_engine())[0] if STATE["status"] == "ready" else None
+                    with plainmod.CONTEXTS.lock:
+                        cs = list(plainmod.CONTEXTS.items.values())
+                    self.send_json({"object": "list", "data": [plainmod.CONTEXTS.info(c, limit) for c in cs]})
+                    return True
+                if method == "GET" and cid and not act:
+                    c = plainmod.CONTEXTS.get(cid)
+                    self.send_json(plainmod.CONTEXTS.info(c, plainmod.limits(self.api_engine())[0]))
+                    return True
+                if method == "DELETE" and cid and not act:
+                    if not plainmod.CONTEXTS.delete(cid, self.api_engine() if STATE["status"] == "ready" else None):
+                        raise plainmod.ApiError("no such context: " + cid[:60], 404)
+                    self.send_json({"id": cid, "object": "context", "deleted": True})
+                    return True
+                if method != "POST" or (cid and act not in ("append", "fork")) or (not cid and act):
+                    raise plainmod.ApiError("no such path", 404)
+                if not self.api_ready():
+                    return True
+                e, fn = self.api_engine(), STATE["fan"]
+                pr = self.api_priority(b)
+                fanmod.PRIO.p = pr
+                try:
+                    if cid is None:
+                        msgs = b.get("messages")
+                        if not isinstance(msgs, list) or not msgs:
+                            raise plainmod.ApiError("messages: a list of {role, content}", 400)
+                        cfg = settings.load()["api"]
+                        c, limit = plainmod.create(fn, e, msgs, b.get("ttl_s"), int(cfg.get("contexts_max") or 0))
+                        self.send_json(plainmod.CONTEXTS.info(c, limit), 201)
+                    elif act == "append":
+                        if b.get("messages") is not None and not isinstance(b.get("messages"), list):
+                            raise plainmod.ApiError("messages: a list of {role, content}", 400)
+                        if b.get("text") is None and not b.get("messages"):
+                            raise plainmod.ApiError("text (or messages) to append", 400)
+                        c, limit = plainmod.append(fn, e, cid, b.get("text"), b.get("messages"))
+                        self.send_json(plainmod.CONTEXTS.info(c, limit))
+                    else:
+                        c = plainmod.fork(cid, b.get("ttl_s"))
+                        self.send_json(plainmod.CONTEXTS.info(c, plainmod.limits(e)[0]), 201)
+                finally:
+                    fanmod.PRIO.p = None
+                return True
+            if p == "/api/v1/batch" and method == "POST":
+                self.api_batch(b)
+                return True
+            if p.startswith("/api/v1/batch/") and p.endswith("/cancel") and method == "POST":
+                bid = p.strip("/").split("/")[3]
+                per = BATCHES.get(bid)
+                if per is None:
+                    raise plainmod.ApiError("no such batch (it has ended, or never was): " + bid[:60], 404)
+                ids = b.get("ids") if isinstance(b.get("ids"), list) else [b["id"]] if b.get("id") is not None else list(per)
+                n = 0
+                for i in ids:
+                    ev = per.get(str(i))
+                    if ev is not None and not ev.is_set():
+                        ev.set()
+                        n += 1
+                self.send_json({"batch": bid, "cancelled": n})
+                return True
+        except plainmod.ApiError as e:
+            self.api_error(str(e), e.code)
+            return True
+        return False
+
+    @staticmethod
+    def api_priority(b):
+        pr = b.get("priority")
+        if pr in (None, ""):
+            return None
+        if pr not in ("high", "normal", "low"):
+            raise plainmod.ApiError('priority: "high", "normal" or "low"', 400)
+        return pr
+
+    def reply_args(self, b):
+        """the reply options of a plain request (or of one request of a batch)"""
+        mt = b.get("max_tokens", b.get("max_completion_tokens"))
+        if mt is not None and (not isinstance(mt, int) or mt < 1):
+            raise plainmod.ApiError("max_tokens: a whole number of 1 or more", 400)
+        for k in ("temperature", "top_p", "min_p"):
+            if b.get(k) is not None and not isinstance(b.get(k), (int, float)):
+                raise plainmod.ApiError(k + ": a number", 400)
+        if b.get("top_p") is not None and not 0 < float(b["top_p"]) <= 1:
+            raise plainmod.ApiError("top_p: more than 0 and at most 1", 400)
+        if b.get("seed") is not None and not isinstance(b.get("seed"), int):
+            raise plainmod.ApiError("seed: a whole number", 400)
+        rf = b.get("response_format")
+        if rf is not None and not (isinstance(rf, dict) and rf.get("type") in ("text", "json_object", "json_schema")):
+            raise plainmod.ApiError('response_format: {"type": "text" | "json_object" | "json_schema", ...}', 400)
+        if isinstance(b.get("n"), int) and b["n"] != 1:
+            raise plainmod.ApiError("n: only 1 (send a batch for several replies: POST /api/v1/batch)", 400)
+        return dict(max_tokens=mt, temperature=b.get("temperature"), top_p=b.get("top_p"), min_p=b.get("min_p"), seed=b.get("seed"),
+                    stop=b.get("stop"), priority=self.api_priority(b), response_format=rf)
+
+    def plain_chat(self, b):
+        """POST /v1/chat/completions with "mode": "plain" (or a "context", or a response_format): see app/plain.py"""
+        try:
+            ctx = plainmod.CONTEXTS.get(b["context"]) if b.get("context") else None
+            msgs = b.get("messages") if b.get("messages") is not None else []
+            if not isinstance(msgs, list) or (ctx is None and not msgs):
+                raise plainmod.ApiError("messages: a list of {role, content}", 400)
+            args = self.reply_args(b)
+        except plainmod.ApiError as e:
+            return self.api_error(str(e), e.code)
+        cfg = settings.load()["api"]
+        cancel, done = threading.Event(), threading.Event()
+        if not GATE.plain_enter(cancel, int(cfg.get("plain_max") or 0)):
+            return self.api_error("busy: a model is being loaded, or plain_max requests are being written; try again", 503)
+        e, fn = self.api_engine(), STATE["fan"]
+        now, model = time.time(), (STATE.get("model") or {}).get("id") or "rapidli"
+        rid = "chatcmpl-" + uuid.uuid4().hex[:24]
+        stream = bool(b.get("stream"))
+        self.watch_client(cancel, done)
+        try:
+            if not stream:
+                try:
+                    res = plainmod.Reply(fn, e, msgs, ctx, cancel=cancel, **args).run()
+                except plainmod.ApiError as x:
+                    return self.api_error(str(x), x.code)
+                usage = {"prompt_tokens": res["prompt_tokens"], "completion_tokens": res["completion_tokens"],
+                         "total_tokens": res["prompt_tokens"] + res["completion_tokens"]}
+                self.store_plain(b, msgs, res["content"], cfg)
+                return self.send_json({"id": rid, "object": "chat.completion", "created": int(now), "model": model,
+                                       "choices": [{"index": 0, "message": {"role": "assistant", "content": res["content"]},
+                                                    "finish_reason": res["finish_reason"]}],
+                                       "usage": usage, "rapidli": {"mode": "plain", "context": ctx.id if ctx else None, "priority": args["priority"]}})
+            self.sse_open()
+            first = [True]
+
+            def chunk(delta=None, finish=None, usage=None):
+                d = {"id": rid, "object": "chat.completion.chunk", "created": int(now), "model": model,
+                     "choices": [{"index": 0, "delta": {} if delta is None else ({"role": "assistant", "content": delta} if first[0] else {"content": delta}),
+                                  "finish_reason": finish}]}
+                if delta is not None:
+                    first[0] = False
+                if usage:
+                    d["usage"] = usage
+                self.sse_line(d)
+
+            def on_text(t):
+                if cancel.is_set():
+                    return
+                try:
+                    chunk(t)
+                except Exception:
+                    cancel.set()                      # (the client went away: the engine is told, the lane freed)
+            try:
+                res = plainmod.Reply(fn, e, msgs, ctx, on_text=on_text, cancel=cancel, **args).run()
+            except plainmod.ApiError as x:
+                try:
+                    self.sse_line({"error": {"message": str(x), "type": "rapidli", "code": x.code}})
+                    self.sse_line(b"[DONE]")
+                except Exception:
+                    pass
+                return
+            if cancel.is_set() and res["finish_reason"] == "cancelled":
+                return
+            usage = {"prompt_tokens": res["prompt_tokens"], "completion_tokens": res["completion_tokens"],
+                     "total_tokens": res["prompt_tokens"] + res["completion_tokens"]}
+            try:
+                if first[0]:
+                    chunk("")
+                chunk(None, res["finish_reason"], usage)
+                if (b.get("stream_options") or {}).get("include_usage"):
+                    self.sse_line({"id": rid, "object": "chat.completion.chunk", "created": int(now), "model": model, "choices": [], "usage": usage})
+                self.sse_line(b"[DONE]")
+            except Exception:
+                pass
+            self.store_plain(b, msgs, res["content"], cfg)
+        finally:
+            done.set()
+            GATE.plain_exit(cancel)
+
+    def store_plain(self, b, msgs, content, cfg):
+        """"store": true keeps a plain request and its reply as a chat (in the API folder); by default nothing is kept"""
+        if not b.get("store"):
+            return
+        try:
+            now = time.time()
+            conv = [{"role": m.get("role"), "content": plainmod.content_of(m.get("content"), {}), "at": now}
+                    for m in msgs if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+            c = {"id": uuid.uuid4().hex[:12], "title": title_of(next((m["content"] for m in reversed(conv) if m["role"] == "user"), "API")),
+                 "created": now, "messages": conv + [{"role": "assistant", "content": content, "at": now}], "api": True}
+            if cfg.get("folder", True):
+                ensure_api_folder()
+                c["folder"] = API_FOLDER
+            save_chat(c)
+        except Exception as e:
+            print("store:", str(e)[:200], flush=True)
+
+    def api_batch(self, b):
+        """POST /api/v1/batch {context, requests: [{id, messages, max_tokens, temperature, top_p, stop, seed, priority,
+        response_format}], priority}: every request written at once on lanes of its own, on one connection of
+        server-sent events: {"batch", "requests"} first, then {"id", "delta"} as they write and {"id", "done": true,
+        "finish_reason", "usage"} (or {"id", "done": true, "error"}) as each ends, then [DONE]."""
+        if not self.api_ready():
+            return
+        reqs = b.get("requests")
+        if not isinstance(reqs, list) or not reqs or len(reqs) > 256:
+            raise plainmod.ApiError("requests: a list of 1 to 256 {id, messages, ...}", 400)
+        ctx = plainmod.CONTEXTS.get(b["context"]) if b.get("context") else None
+        jobs, seen = [], set()
+        for k, r in enumerate(reqs):
+            if not isinstance(r, dict):
+                raise plainmod.ApiError(f"requests[{k}]: an object", 400)
+            rid = str(r.get("id") if r.get("id") is not None else k)
+            if rid in seen:
+                raise plainmod.ApiError(f"requests[{k}]: the id {rid!r} is used twice", 400)
+            seen.add(rid)
+            msgs = r.get("messages") if r.get("messages") is not None else []
+            if not isinstance(msgs, list) or (ctx is None and not msgs):
+                raise plainmod.ApiError(f"requests[{k}].messages: a list of {{role, content}}", 400)
+            args = self.reply_args({"priority": b.get("priority"), **r})
+            jobs.append((rid, msgs, args))
+        cfg = settings.load()["api"]
+        cancel_all, done = threading.Event(), threading.Event()
+        if not GATE.plain_enter(cancel_all, int(cfg.get("plain_max") or 0)):
+            raise plainmod.ApiError("busy: a model is being loaded, or plain_max requests are being written; try again", 503)
+        bid = "batch-" + uuid.uuid4().hex[:16]
+        per = {rid: threading.Event() for rid, _, _ in jobs}
+        BATCHES[bid] = per
+        e, fn = self.api_engine(), STATE["fan"]
+        q = queue.Queue()
+        self.watch_client(cancel_all, done)
+
+        def one(rid, msgs, args):
+            cancel = plainmod.Either(per[rid], cancel_all)
+            try:
+                res = plainmod.Reply(fn, e, msgs, ctx, on_text=lambda t: q.put({"id": rid, "delta": t}), cancel=cancel, **args).run()
+                q.put({"id": rid, "done": True, "finish_reason": "cancelled" if per[rid].is_set() else res["finish_reason"],
+                       "usage": {"prompt_tokens": res["prompt_tokens"], "completion_tokens": res["completion_tokens"],
+                                 "total_tokens": res["prompt_tokens"] + res["completion_tokens"]}})
+            except plainmod.ApiError as x:
+                q.put({"id": rid, "done": True, "error": {"message": str(x), "type": "rapidli", "code": x.code}})
+            except Exception as x:
+                q.put({"id": rid, "done": True, "error": {"message": str(x)[:300], "type": "rapidli", "code": 500}})
+        try:
+            self.sse_open()
+            self.sse_line({"batch": bid, "requests": len(jobs), "context": ctx.id if ctx else None})
+            for j in jobs:
+                threading.Thread(target=one, args=j, daemon=True).start()
+            left = len(jobs)
+            while left:
+                try:
+                    ev = q.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if ev.get("done"):
+                    left -= 1
+                try:
+                    self.sse_line(ev)
+                except Exception:
+                    cancel_all.set()                  # (the client went away: every request's lane is freed)
+            try:
+                self.sse_line(b"[DONE]")
+            except Exception:
+                pass
+        finally:
+            done.set()
+            cancel_all.set()
+            BATCHES.pop(bid, None)
+            GATE.plain_exit(cancel_all)
 
     def run_captured(self, body, on_event=None):
         """send_answer with its events collected rather than streamed. -> (events, [(error json, code)])"""
@@ -2834,6 +3289,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": "not found"}, 404)
 
     def do_DELETE(self):
+        p = self.path.split("?")[0]
+        if p.startswith(self.API_PATHS):
+            return self.api_request("DELETE", p)
         if not self._own():
             return self.send_json({"error": "not allowed"}, 403)
         p = self.path.split("?")[0]
@@ -2869,7 +3327,7 @@ class Handler(BaseHTTPRequestHandler):
             if STATE["status"] == "loading":
                 return self.send_json({"error": "a model is being loaded"}, 409)
             print(time.strftime("%H:%M:%S"), "load requested:", m["id"], "refit" if b.get("refit") else "", "from", self.headers.get("Referer", "?"), flush=True)
-            threading.Thread(target=load_model, args=(m, bool(b.get("refit"))), daemon=True).start()
+            threading.Thread(target=load_model, args=(m, bool(b.get("refit")), None, None), daemon=True).start()
             return self.send_json({"ok": True})
         if p == "/api/unload":
             if STATE["status"] == "loading":
@@ -3295,7 +3753,7 @@ class Handler(BaseHTTPRequestHandler):
             st.setdefault("ctx", {})[m["id"]] = v
             save_state({"ctx": st["ctx"]})
             print(time.strftime("%H:%M:%S"), "context changed:", m["id"], v, flush=True)
-            threading.Thread(target=load_model, args=(m, True), daemon=True).start()
+            threading.Thread(target=load_model, args=(m, True, None, None), daemon=True).start()
             return self.send_json({"ok": True})
         if p == "/api/stop":
             # the answer of one run (the page sends its run's id) or chat; neither: every answer
