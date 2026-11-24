@@ -1,7 +1,12 @@
 # Changelog
 
-## Fixes from a fresh install (24 Nov 2026)
+## 0.9.1: only the driver to install, fixes from a fresh install (24 Nov 2026)
 
+- The engine downloads carry the CUDA libraries they use, so the CUDA Toolkit (about 3 GB) is no longer needed: only
+  the NVIDIA driver (580 or newer on Windows, 525 or newer on Linux). Windows: cuBLAS 13.0 (`cublas64_13.dll`,
+  `cublasLt64_13.dll`); Linux: the CUDA 12.6 runtime and cuBLAS (`libcudart.so.12`, `libcublas.so.12`,
+  `libcublasLt.so.12`), with NVIDIA's EULA as `LICENSE.cuda.txt`. Checked: with no toolkit on the path, the engine
+  loads them from its own folder. The engine itself is the 0.9.0 build.
 - Stopping Rapidli while a model loaded (stop.sh / stop.bat, or the app's shutdown) left the engine running and
   holding the graphics card: the app counted the engine as its own only once the load had finished. It does so from
   the start of the load now.

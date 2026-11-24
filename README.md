@@ -91,15 +91,15 @@ page. Everything runs on your computer.
 | **Graphics memory** | Any amount. Rapidli measures what a lane costs and fits as many as your card holds, so a smaller card runs the same models with fewer lanes and lower totals. The model file should fit the card with room to spare, unless it is a mixture of experts (below). Get models marks which files fit yours. |
 | **System memory (RAM)** | Enough for the app (a few GB). For a **mixture-of-experts model larger than the card**, the experts that don't fit stay in RAM, so you need free RAM of roughly the model size minus the part on the card: the 61.9 GB model above ran with 64 GB. A **dense** model larger than the card is not supported (it is refused with "does not fit"). |
 | **Operating system** | Windows 11 (tested; Windows 10 should work) or Linux (64-bit; built and started under WSL 2 only, untested on a native install). macOS: [help wanted](#macos-help-wanted). |
-| **Software** | The NVIDIA driver, the CUDA toolkit (13 on Windows; 12.x or 13 on Linux) and Python 3.10 or newer. |
+| **Software** | The NVIDIA driver (580 or newer on Windows, 525 or newer on Linux) and Python 3.10 or newer. The CUDA libraries the engine uses come with the engine download: no CUDA Toolkit needed. |
 | **Models** | Any GGUF chat model that llama.cpp (Unsloth's fork) loads. Measured families include Qwen3.6/3.8 (dense and mixture of experts, with MTP drafting), Inkling 2 Mini (Thinking Machines Lab), Ternary-Bonsai, and Gemma 4 / Nemotron. |
 
 ## Install
 
 ### Windows
 
-1. Install the **NVIDIA driver** (a current one) and the **[CUDA Toolkit 13](https://developer.nvidia.com/cuda-downloads)**.
-   Rapidli uses its cuBLAS libraries and finds them through `CUDA_PATH`, which the installer sets.
+1. Install a current **[NVIDIA driver](https://www.nvidia.com/drivers)** (580 or newer). The CUDA libraries
+   come with the engine download, so the CUDA Toolkit is not needed.
 2. Install **[Python 3.10 or newer](https://www.python.org/downloads/)** (keep "py launcher" ticked).
 3. Get Rapidli: `git clone https://github.com/JozefJarosciak/Rapidli.git`, or download the source ZIP from this page.
 4. From the **[Releases](https://github.com/JozefJarosciak/Rapidli/releases)** page, download
@@ -120,8 +120,7 @@ Building the engine yourself on Windows is possible but involved: see [docs/BUIL
 **Option A: the built engine** (RTX 20/30/40, x86-64 with AVX2, glibc 2.35+ such as Ubuntu 22.04 or newer):
 
 ```sh
-# 1. the NVIDIA driver and the CUDA Toolkit 12.x (https://developer.nvidia.com/cuda-downloads): the engine uses its
-#    libcudart and libcublas from /usr/local/cuda/lib64
+# 1. the NVIDIA driver, 525 or newer (nvidia-smi shows it); the CUDA libraries come with the engine download
 # 2. Python 3.10+ (and venv for the optional packages), e.g. on Ubuntu/Debian:
 sudo apt install git python3 python3-venv
 # 3. Rapidli, and the engine from the Releases page unpacked into engine/bin
@@ -266,7 +265,7 @@ More in [docs/RESULTS.md](docs/RESULTS.md); how each speed-up was found, includi
   close them and press Fit again.
 - **No model found:** add the folder your models are in under Settings › Models, or use Settings › Models › Get models.
 - **Rapidli does not start:** see `data/logs/rapidli.err.log` and `data/logs/engine-11832.log`. On Windows, check that
-  `engine\bin\rapidli-engine.exe` exists and the CUDA Toolkit 13 is installed. On Linux, "the engine is not installed"
+  `engine\bin\rapidli-engine.exe` and `engine\bin\cublas64_13.dll` exist and the NVIDIA driver is 580 or newer. On Linux, "the engine is not installed"
   means the release archive is not unpacked into `engine/bin` (or `engine/build-linux.sh` has not been run).
 - **Ports:** Rapidli uses 11842 (the app) and 11832 (its engine), both on 127.0.0.1.
 

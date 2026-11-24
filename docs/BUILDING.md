@@ -104,8 +104,8 @@ among them NVFP4's).
 Then copy `ggml-cuda.dll` from `engine\cuda\out\bin`, and `ggml.dll`, `ggml-base.dll`, the `ggml-cpu-*.dll` files
 and `mtmd.dll` from `%LLAMA_DIR%\build\bin\Release`, into `engine\bin`.
 
-The CUDA runtime libraries (cuBLAS) are not copied into `engine\bin`: the engine finds them through `CUDA_PATH`, which
-the CUDA installer sets.
+The CUDA libraries (cuBLAS) are not copied into `engine\bin` by the build: the engine then finds them through
+`CUDA_PATH`, which the CUDA installer sets. A release adds them (see [A release](#a-release)).
 
 ## The patches
 
@@ -159,3 +159,10 @@ to the binaries (see `THIRD_PARTY_NOTICES.md`). Pack it from a list, not the who
 Windows: `rapidli-engine.exe`, `llama.dll`, `mtmd.dll`, `ggml.dll`, `ggml-base.dll`, `ggml-cpu-*.dll`,
 `ggml-cuda.dll`; Linux: `rapidli-engine` and the `lib*.so*` files. Leave out the tools the engine does not use
 (`llama-server`, `llama-bench`, `llama-quantize`, the `*-impl.dll` files) and any `*.bak*`.
+
+Add the CUDA libraries of the toolkit the engine was built with, so that users need only the driver, and the
+toolkit's `EULA.txt` as `LICENSE.cuda.txt`. Windows: `cublas64_13.dll` and `cublasLt64_13.dll` from
+`%CUDA_PATH%\bin\x64` (the runtime is linked in; the engine's own folder comes first on its PATH). Linux:
+`libcudart.so.12`, `libcublas.so.12` and `libcublasLt.so.12` (the versioned files, with these names as links) from
+`/usr/local/cuda/lib64` (the engine's RUNPATH is `$ORIGIN`). Check with `ldd` (Linux) or by loading `ggml-cuda.dll`
+with only `engine\bin` on the PATH that they come from the archive.

@@ -18,10 +18,10 @@ source.
 | llama.cpp, ggml and mtmd (vision), from the same fork | MIT |
 | cpp-httplib (the engine's HTTP server), from llama.cpp's `vendor/` | MIT |
 | nlohmann/json, from llama.cpp's `vendor/` | MIT |
-| NVIDIA CUDA runtime (cuBLAS) | NVIDIA's CUDA EULA. Not distributed with Rapidli: it comes with the CUDA toolkit or runtime you install. |
+| NVIDIA CUDA runtime and cuBLAS (`cublas64_13.dll`, `cublasLt64_13.dll`; `libcudart.so.12`, `libcublas.so.12`, `libcublasLt.so.12`) | NVIDIA's CUDA EULA, which lists them as redistributable. Not in this repository; the engine downloads on the Releases page include them, with the EULA as `LICENSE.cuda.txt`. |
 
 A release that ships built binaries (`engine/bin`) must include llama.cpp's `LICENSE` and its
-`THIRD_PARTY_LICENSES.txt` next to them.
+`THIRD_PARTY_LICENSES.txt` next to them, and the CUDA EULA next to the CUDA libraries.
 
 ## Optional Python packages (installed by you, not bundled)
 
