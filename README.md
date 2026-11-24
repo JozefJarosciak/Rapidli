@@ -6,6 +6,12 @@ Rapidli plans an answer first, then writes every part of it side by side in the 
 article, a module of 32 functions or a page of 64 animations comes back several times faster than one stream of tokens
 could write it, from the same model file you already have.
 
+### Watch the 1-minute demo
+
+https://github.com/user-attachments/assets/08ff6784-08fd-47d6-8cf0-544aa5170138
+
+<sub>Real time unless marked as a time-lapse, one RTX 4090: long articles, a 62 GB model on a 24 GB card, 64 animations, 12 artworks and 12 games, each from one prompt.</sub>
+
 ![Rapidli writing a long article on 157 lanes at 2,334 tokens a second](docs/images/35b-158-lanes.jpg)
 <sub>Real time, one RTX 4090. Qwen3.8-35B-A3B (15 GB) writes a 24,747-token article in 17.6 s: 158 lanes, an engine-measured peak of 2,353 tokens a second.</sub>
 
