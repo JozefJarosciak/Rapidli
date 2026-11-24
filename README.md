@@ -27,10 +27,27 @@ writing **one** answer. One lane alone writes about 45 to 220 tokens a second on
 
 ## Contents
 
-[How it differs](#how-it-differs) · [How it works](#how-it-works) · [Who it is for](#who-it-is-for) · [Screenshots](#screenshots) ·
-[Inkling 2](#inkling-2) · [What you need](#what-you-need) · [Install: Windows](#windows) · [Linux](#linux) · [macOS](#macos-help-wanted) ·
-[First start](#first-start) · [Features](#features) · [API](#the-api) · [Tested on](#tested-on) · [Limits](#limits) ·
-[Trouble](#trouble) · [Contributing](#contributing)
+1. [How it differs](#how-it-differs)
+2. [How it works](#how-it-works)
+   - [The parts](#the-parts)
+3. [Who it is for](#who-it-is-for)
+4. [Screenshots](#screenshots)
+   - [Speed](#speed)
+   - [What it makes](#what-it-makes)
+5. [Inkling 2](#inkling-2)
+6. [What you need](#what-you-need)
+7. [Install](#install)
+   - [Windows](#windows)
+   - [Linux](#linux)
+   - [macOS (help wanted)](#macos-help-wanted)
+8. [First start](#first-start)
+9. [Features](#features)
+10. [The API](#the-api)
+11. [Tested on](#tested-on)
+12. [Limits](#limits)
+13. [Trouble](#trouble)
+14. [Contributing](#contributing)
+15. [Licence](#licence)
 
 ## How it differs
 
