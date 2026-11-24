@@ -17,8 +17,11 @@ For live copilots, agents and document tools (docs/API.md › Many related reque
   one. The app's clean-up (`Fan.free_slots`, `heal`) never releases a context's state (`fan.PINNED`); an expired,
   deleted or reloaded-away context answers 404, a full one 413, one too many 429. `app/plain.py`.
 - **Priority** (`"priority": "high" | "normal" | "low"`): the engine lets waiting requests in by priority, and of the
-  long prompts being read it reads the highest priority's first one to its end before the next, instead of in turns
-  (four 2,400-token prompts sent together had all started writing at about 2.8 s; one alone starts at 0.7 s).
+  long prompts being read it reads the highest priority's first one to its end before the next, instead of in turns;
+  within one priority a short prompt (a reply's few tokens after its parked state) goes first, as it takes one pass.
+  Measured with Ternary-Bonsai-2.5-27B on an RTX 4090, four 4,100-token prompts sent together: before, every reply
+  started writing at 4.7 s; now at 1.3 / 2.7 / 3.9 / 5.1 s (1.25 s for one alone), and one sent last with
+  `"priority": "high"` at 1.5 s.
 - **Batches** (`POST /api/v1/batch`): many replies from one context on one connection of server-sent events
   (`{id, delta}`, `{id, done, finish_reason, usage}`), each cancellable by its id (`/api/v1/batch/{batch}/cancel`).
 - **Load options** (`POST /api/v1/models/load`): `lanes` (a maximum), `context`, `margin_mb`, `vision`, `drafting`

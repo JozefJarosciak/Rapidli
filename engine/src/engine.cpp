@@ -48,6 +48,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 #include "ggml-alloc.h"
 
@@ -679,11 +680,17 @@ struct Engine {
             // version 5: the prompt of the highest priority that came first, read to its end before the next one. (Taking
             // the readers in turn, four 2,400-token prompts sent together all started writing at about 2.8 s, where one
             // alone starts at 0.7 s; one after another, the first starts at 0.7 s and the last no later than before.)
+            // (within one priority a short prompt goes first: it takes one pass. Without that, a reply that starts from a
+            // parked state with a few tokens of its own waited behind every long prompt that came before it: four
+            // 4,100-token prompts were read in turn at 1.15 / 2.3 / 3.5 / 4.6 s, yet all four replies started at 4.7 s)
             int reader = -1;
+            auto key = [&](int i) {
+                const auto & r = *L[i].req;
+                return std::make_tuple(r.prio, (int) r.prompt.size() > trickle ? 1 : 0, r.t_arrive);
+            };
             for (int i = 0; i < W; ++i) {
                 if (bulk_left(L[i]) == 0) { continue; }
-                if (reader < 0 || L[i].req->prio < L[reader].req->prio
-                    || (L[i].req->prio == L[reader].req->prio && L[i].req->t_arrive < L[reader].req->t_arrive)) { reader = i; }
+                if (reader < 0 || key(i) < key(reader)) { reader = i; }
             }
             if (reader >= 0) {
                 rr = reader + 1;

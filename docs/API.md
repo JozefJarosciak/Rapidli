@@ -305,7 +305,12 @@ time between the passes that write:
 - within one priority, a prompt is **read to its end before the next** (first come, first read). The prompts used to
   take turns, so four 2,400-token prompts sent together all started writing at about 2.8 s, where one alone starts
   at 0.7 s; read one after another, the first can start writing as soon as its own prompt is read.
+- a short prompt (a reply's few tokens after a context) goes before long ones of the same priority: it takes one pass;
 - requests waiting for a free lane are let in by priority too.
+
+Measured with Ternary-Bonsai-2.5-27B on an RTX 4090, four plain requests of about 4,100 tokens each sent together: the
+replies start writing at 1.3, 2.7, 3.9 and 5.1 s (one alone: 1.25 s; when they were read in turns, all four at 4.7 s),
+and with the last one sent marked `high`, that one starts at 1.5 s.
 
 A request without a priority is `normal`, as are the app's own.
 
