@@ -19,6 +19,29 @@ Measured on one RTX 4090 (24 GB) with an Intel Core i9-14900KF and 64 GB of RAM,
   8.6 to 8.8; two-level answers 7.8 against 8.5 (with a kind for every point).
 - Many questions at once: 1,458 to 1,467 tokens/s, the same as the earlier engine (1,464 to 1,473).
 
+## Inkling-2-Mini (mixture of experts, looped layers)
+
+UD-Q2_K_XL (9.1 GB), engine on llama.cpp b12631 with Rapidli's patches:
+
+| | Tokens per second |
+|---|---|
+| One lane (11.7 ms a token) | 82 to 85; stock llama.cpp b12631's one stream 81.5 |
+| 8 lanes (20.8 ms a pass) | about 385 |
+| 58 lanes, all writing (43 ms a pass) | 1,340 |
+| 124 lanes, all writing | 1,497 |
+| A Longest article, 7,077 tokens in 16.7 s on 83 lanes | 424 over the whole answer, peak 1,116 |
+| A Long article, about 1,700 words | written in 11 s |
+
+- Lanes fitted: 108 at an 8k conversation context, 58-59 at 32k (21 before the fitting counted the looped blocks).
+- UD-Q4_K_M: 29 lanes at 8k, one lane 75 tok/s (stock 75.1), all lanes 786 tok/s, a long answer 230 tok/s.
+- Before the engine work, 62 lanes wrote 231 tok/s together: every pass built the relative-position bias over the
+  whole shared cache. The changes one by one are in the [CHANGELOG](../CHANGELOG.md) ("Inkling 2 at speed").
+- What limits a whole answer now is its shape, not the engine: a long answer has 5 to 17 lanes writing on average
+  (the plan comes first, parts end unevenly). One lane is bound by the number of kernels: a pass of one token is
+  about 5,400 small kernels.
+- Quality, blind review of Long articles (5 topics, two rounds of reviewers): 6.0 and 6.1 of 10, against
+  Qwen3.8-35B-A3B 6.0 / 6.8 and Ternary-Bonsai-2-27B 4.4 / 4.9.
+
 ## Rapidli (the chat)
 
 | Model | Lanes fitted | Notes |

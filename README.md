@@ -15,9 +15,9 @@ https://github.com/user-attachments/assets/08ff6784-08fd-47d6-8cf0-544aa5170138
 ![Rapidli writing a long article on 157 lanes at 2,334 tokens a second](docs/images/35b-158-lanes.jpg)
 <sub>Real time, one RTX 4090. Qwen3.8-35B-A3B (15 GB) writes a 24,747-token article in 17.6 s: 158 lanes, an engine-measured peak of 2,353 tokens a second.</sub>
 
-| **2,353 tok/s** | **5,024 tok/s** | **474 tok/s** |
-|:---:|:---:|:---:|
-| a 35B model, 158 lanes, one long article | a 2B model, peak second | a **62 GB** model on a **24 GB** card: the rest sits in system RAM |
+| **2,353 tok/s** | **5,024 tok/s** | **1,116 tok/s** | **474 tok/s** |
+|:---:|:---:|:---:|:---:|
+| a 35B model, 158 lanes, one long article | a 2B model, peak second | [Inkling 2 Mini](#inkling-2), 83 lanes, one long article | a **62 GB** model on a **24 GB** card: the rest sits in system RAM |
 
 Every figure on this page is Rapidli's own measurement. The engine times its own passes, and the live meter, the
 figure under each answer and the Top 10 all show that same number. These are tokens per second for all lanes together
@@ -28,7 +28,7 @@ writing **one** answer. One lane alone writes about 45 to 220 tokens a second on
 ## Contents
 
 [How it differs](#how-it-differs) · [Who it is for](#who-it-is-for) · [Screenshots](#screenshots) ·
-[What you need](#what-you-need) · [Install: Windows](#windows) · [Linux](#linux) · [macOS](#macos-help-wanted) ·
+[Inkling 2](#inkling-2) · [What you need](#what-you-need) · [Install: Windows](#windows) · [Linux](#linux) · [macOS](#macos-help-wanted) ·
 [First start](#first-start) · [Features](#features) · [API](#the-api) · [Tested on](#tested-on) · [Limits](#limits) ·
 [Trouble](#trouble) · [Contributing](#contributing)
 
@@ -82,6 +82,57 @@ page. Everything runs on your computer.
 | **Diagrams:** Mermaid charts drawn in the answer; open them full screen to drag and zoom. | **A generative art gallery:** 12 algorithms written in 19 s. |
 | ![Get models: search Hugging Face, see what fits](docs/images/get-models.jpg) | ![Offline Wikipedia](docs/images/offline-wikipedia.jpg) |
 | **Get models:** search Hugging Face, see each file's size and whether it fits your card, and download over several connections. | **Offline Wikipedia:** 400,000 articles (1 GB) are offered on the first start and looked up before the web. |
+
+## Inkling 2
+
+Rapidli runs **Inkling 2 Mini**, the mixture-of-experts model from Thinking Machines Lab, in
+[Unsloth's GGUF files](https://huggingface.co/unsloth/Inkling-2-Mini-GGUF). Inkling's layers are *looped*: 24 blocks are
+stored and 48 run, with attention in every one of them. Rapidli writes one Inkling answer on up to 108 lanes at once.
+
+![Inkling-2-Mini writing a long article on 83 lanes at 1,116 tokens a second](docs/images/inkling-peak.jpg)
+<sub>Real time, one RTX 4090. Inkling-2-Mini UD-Q2_K_XL (9.1 GB) writes a Longest article about the history of aviation: 83 of 108 lanes at once, peak 1,116 tokens a second; the whole article, 7,077 tokens, in 16.7 s.</sub>
+
+**Results** (RTX 4090, 24 GB; measured by the engine):
+
+| Inkling-2-Mini | UD-Q2_K_XL (9.1 GB) | UD-Q4_K_M |
+|---|---|---|
+| Lanes that fit | 108 at an 8k conversation context, 58-59 at 32k | 29 at 8k |
+| One lane | 82-85 tok/s, the same as stock llama.cpp's one stream (81.5) | 75 tok/s (stock llama.cpp: 75.1) |
+| All lanes writing together | 1,340 tok/s on 58 lanes, 1,497 on 124 | 786 tok/s on 29 lanes |
+| A Longest article | 7,077 tokens in 16.7 s on 83 lanes (424 tok/s over the whole answer), **peak 1,116 tok/s** | not measured |
+| A Long article | about 1,700 words in 11 s | a long answer at 230 tok/s |
+
+A whole answer runs slower than the all-lanes figure because the plan is written by one lane first and the parts end
+at different times: on average 5 to 17 lanes write in each pass of a long answer, and a pass costs 11.7 ms for one lane,
+20.8 ms for 8 lanes and 43 ms for 58.
+
+**Quality.** In a blind review of Long articles (5 topics, three models, two rounds of reviewers), Inkling-2-Mini Q2_K_XL
+scored **6.0 and 6.1 of 10**, level with Qwen3.8-35B-A3B (6.0 / 6.8) and ahead of Ternary-Bonsai-2-27B (4.4 / 4.9).
+
+**What it took.** The engine moved to llama.cpp release b12631, which reads Inkling's looped layout, and new patches
+were written for it; each is in [docs/BUILDING.md](docs/BUILDING.md) and [CHANGELOG.md](CHANGELOG.md):
+
+| Change | Before | After |
+|---|---|---|
+| Each lane attends to its own cells, the relative-position bias in a per-head mask (`patch_zzzrows.py`) | 62 lanes 231 tok/s | 888 tok/s |
+| The 3 query heads of a K/V head read its cells once (`patch_zzzzgqa.py`) | 83 lanes, 2,400-token prompt: 783 tok/s | 1,006 tok/s |
+| A concat kernel that left most threads idle, 24% of a pass (`patch_zconcat.py`) | 124 lanes 1,196 tok/s | 1,497 tok/s |
+| F32 router and loop controls on the matrix-vector kernel (`patch_zmmvf32.py`) | 8 lanes 22.1 ms a pass | 20.8 ms |
+| Two pairs of small kernels fused, bit-identical (`patch_zfuse2.py`) | 1 lane 12.0 ms a token | 11.7 ms |
+| Fitting counts each run of the looped blocks | 21 lanes at 32k | 58-59 |
+
+Qwen and Bonsai models run at the same speed as before these changes.
+
+**Good to know**
+
+- Get it in **Settings › Models › Get models**: search "Inkling". On a 24 GB card UD-Q2_K_XL is the faster file
+  (looped layers read the experts again on every loop, so a smaller file gives more lanes and shorter passes).
+- Inkling answers without thinking (effort 0). "Think per part" works as with any model; a thinking level of its own
+  is not offered yet.
+- No drafting for short answers: Inkling has no MTP head, and its DSpark drafter (`dspark-…gguf`) does not load in this
+  engine yet, so it is hidden from the model list.
+- Its vision projector (`mmproj-F16.gguf`) loads beside the model; questions about images have not been tested with
+  Inkling yet.
 
 ## What you need
 
@@ -236,7 +287,7 @@ All measurements were taken on one machine:
 | Ternary-Bonsai-2-2B Q2_0 | 0.5 GB | on the card, 248 lanes | a Longest article: 5,273 tokens in 6.9 s on 65 lanes, **peak 5,024 tok/s** |
 | Ternary-Bonsai-2-27B Q2_0 | 7.1 GB | on the card, 156 lanes | the engine alone: 1 lane 90 tok/s, 32 lanes 1,310, 128 lanes 2,330, 156 lanes 2,400; Longest articles 6,400 to 17,500 words in 16.8 to 20.5 s |
 | Qwen3.8-27B UD-Q4_K_M (dense, MTP head) | 15.3 GB | on the card, 72 lanes | one lane 86 to 90 tok/s with MTP drafting (45 to 51 without); a long report 911 to 915 tok/s |
-| Inkling-2-Mini UD-Q2_K_XL (mixture of experts, looped layers) | 9.1 GB | on the card, 108 lanes at an 8k context (59 at 32k) | a Longest article: 7,077 tokens in 16.7 s on 83 lanes, **peak 1,116 tok/s**; the lanes alone 1,340 tok/s |
+| Inkling-2-Mini UD-Q2_K_XL (mixture of experts, looped layers) | 9.1 GB | on the card, 108 lanes at an 8k context (59 at 32k) | a Longest article: 7,077 tokens in 16.7 s on 83 lanes, **peak 1,116 tok/s**; the lanes alone 1,340 tok/s ([more](#inkling-2)) |
 | Qwen3.8-Flash-Next Q2_0 (mixture of experts) | **61.9 GB** | 3.4 GB + a 12.5 GB expert cache on the card, the rest in RAM, 32 lanes | a 32-function Python module in 22.7 s (32/32 pass), **peak 474 tok/s**; long articles 186 to 201 tok/s steady |
 | NVIDIA-Nemotron-3.5-Bolt-E4B BF16 (Gemma 4) | 14.0 GB | on the card | 250 lanes fitted |
 
