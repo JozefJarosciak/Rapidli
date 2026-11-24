@@ -27,7 +27,7 @@ writing **one** answer. One lane alone writes about 45 to 220 tokens a second on
 
 ## Contents
 
-[How it differs](#how-it-differs) · [Who it is for](#who-it-is-for) · [Screenshots](#screenshots) ·
+[How it differs](#how-it-differs) · [How it works](#how-it-works) · [Who it is for](#who-it-is-for) · [Screenshots](#screenshots) ·
 [Inkling 2](#inkling-2) · [What you need](#what-you-need) · [Install: Windows](#windows) · [Linux](#linux) · [macOS](#macos-help-wanted) ·
 [First start](#first-start) · [Features](#features) · [API](#the-api) · [Tested on](#tested-on) · [Limits](#limits) ·
 [Trouble](#trouble) · [Contributing](#contributing)
@@ -50,6 +50,55 @@ requests at once, so a single long answer still comes out at the speed of a sing
 The engine is a small C++ server on top of [llama.cpp](https://github.com/ggml-org/llama.cpp) (Unsloth's fork) with
 Rapidli's own patches to its CUDA kernels and memory. The app is plain Python (standard library only) and one web
 page. Everything runs on your computer.
+
+## How it works
+
+![How an answer is written: read once, planned by one lane, every paragraph on a lane of its own, joined; one pass of the graphics card serves every lane](app/web/about-speed.svg)
+
+The same picture is in the app under **About**. A long answer goes through four steps:
+
+1. **Read once.** Your question and the conversation are read once and parked in the engine. Every lane starts from a
+   copy of that state, so no lane reads the prompt again.
+2. **Plan.** One lane writes a brief answer and an outline, then the points of each part.
+3. **Write.** Every paragraph (or function, scene, table) gets a lane of its own, and all of them are written in the
+   same passes. Reading the weights is the slow part of a pass, and every lane shares it.
+4. **Join.** The parts are put in order, repeated points are dropped, and the answer is saved with the chat.
+
+A short answer is one lane, drafted a few tokens ahead (by the model's MTP head, or by copying from the text) and
+checked in one pass.
+
+### The parts
+
+```mermaid
+flowchart TB
+    UI["<b>Web page</b><br/>chat · loom · engine panel · Run"]
+    API["<b>Your tools</b><br/>OpenAI-style API"]
+    APP["<b>Rapidli app</b> · Python<br/>route: one lane or a plan<br/>plan · a lane per part · join<br/>code lanes · look-ups · fitting"]
+    ENG["<b>Engine</b> · C++ on llama.cpp<br/>one pass for many lanes<br/>parked states · drafting"]
+    GPU[("<b>NVIDIA card</b><br/>weights · lane caches · expert cache")]
+    RAM[("<b>PC memory</b><br/>experts that do not fit the card")]
+    ZIM[("<b>Offline Wikipedia</b><br/>Kiwix .zim files")]
+    NET(["<b>Internet, only when asked</b><br/>web search · Hugging Face"])
+
+    UI <--> APP
+    API <--> APP
+    APP <-->|HTTP on 127.0.0.1| ENG
+    APP --> ZIM
+    APP -.-> NET
+    ENG <--> GPU
+    RAM -.->|copied when needed| GPU
+```
+
+| Part | Where | What it does |
+|---|---|---|
+| Web page | `app/web/index.html` | The chat, the loom (one bar per lane), the engine panel, Settings, Run (code in a sandbox beside the chat) |
+| Server | `app/rapidli.py` | Serves the page and the API, keeps the chats, decides how an answer is written, starts and watches the engine |
+| Answers | `app/fan.py`, `app/sizing.py`, `app/lint.py` | The length from your words, the plan, a lane for every part, the join and the tidy-up |
+| Code | `app/codelanes.py`, `app/pagelanes.py`, `app/codecheck.py`, `app/smoke.py` | Many functions or a whole page on many lanes: candidates side by side, compiled or run in a headless browser, the working one kept |
+| Fitting | `app/fit.py`, `app/system.py` | Measures what a lane costs, starts as many as fit, refits when other programs take or free the card |
+| Models | `app/models.py`, `app/downloads.py`, `app/fetch.py` | Finds GGUF files from other apps; Get models searches Hugging Face and downloads over several connections |
+| Look-ups | `app/kiwix.py`, `app/search.py` | Offline Wikipedia (Kiwix) and web search, read and cited |
+| Engine | `engine/src`, `engine/llama`, `engine/cuda` | A C++ server on llama.cpp (Unsloth's fork): many lanes in one pass, parked states, drafting, experts in RAM; Rapidli's patches to llama.cpp and its CUDA kernels ([docs/BUILDING.md](docs/BUILDING.md)) |
 
 ## Who it is for
 

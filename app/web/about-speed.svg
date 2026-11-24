@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 484" font-family="Inter, 'Segoe UI', system-ui, sans-serif" role="img" aria-labelledby="t d">
   <title id="t">How Rapidli writes an answer quickly</title>
-  <desc id="d">The question is read once and kept in the engine. One lane plans the answer; then every paragraph gets a lane of its own and all lanes are written at the same time, because one pass of the graphics card serves every lane. The parts are joined into the answer. One lane writes about 48 tokens per second; 59 lanes together about 700.</desc>
+  <desc id="d">The question is read once and kept in the engine. One lane plans the answer; then every paragraph gets a lane of its own and all lanes are written at the same time, because one pass of the graphics card serves every lane. The parts are joined into the answer. Qwen3.8-35B-A3B on an RTX 4090: one lane writes 191 tokens per second; 158 lanes together 1,406 over a whole answer, 2,353 in the best second.</desc>
   <defs>
     <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 Z" fill="#7b9399"/>
@@ -82,20 +82,22 @@
   </g>
   <text x="372" y="336" fill="#7b9399" font-size="10.5">lane 1</text>
   <text x="372" y="374" fill="#7b9399" font-size="10.5">⋮</text>
-  <text x="372" y="417" fill="#7b9399" font-size="10.5">lane 59</text>
+  <text x="372" y="417" fill="#7b9399" font-size="10.5">lane 158</text>
   <text x="156" y="440" fill="#7b9399" font-size="10.5">pass 1 → pass 8: every lane gains a token in each pass</text>
-  <text x="32" y="460" fill="#b7c9cc" font-size="10.5">Reading the weights is the slow part, so 59 lanes cost little more than one.</text>
+  <text x="32" y="460" fill="#b7c9cc" font-size="10.5">Reading the weights is the slow part, and every lane shares it.</text>
 
   <!-- the numbers -->
   <rect x="460" y="272" width="424" height="200" rx="12" fill="#131d23" stroke="#22333b"/>
   <text x="476" y="298" fill="#e4eef0" font-size="13" font-weight="700">Tokens per second</text>
-  <text x="476" y="315" fill="#7b9399" font-size="10.5">Qwen3.8 27B (Q3_K_P) on an RTX 4090, measured</text>
-  <text x="476" y="346" fill="#b7c9cc" font-size="11">one lane</text>
-  <rect x="476" y="353" width="25" height="20" rx="4" fill="#7b9399"/>
-  <text x="510" y="368" fill="#e4eef0" font-size="12" font-weight="700">48</text>
-  <text x="476" y="398" fill="#b7c9cc" font-size="11">59 lanes together</text>
-  <rect x="476" y="405" width="360" height="20" rx="4" fill="#8b6cff"/>
-  <text x="828" y="420" fill="#f6f3ff" font-size="12" font-weight="700" text-anchor="end">≈ 700</text>
-  <text x="476" y="446" fill="#7b9399" font-size="10.5">One long answer: 11,426 tokens in 16.3 s.</text>
-  <text x="476" y="461" fill="#7b9399" font-size="10.5">Short answers use one lane, drafted ahead by the model's MTP head.</text>
+  <text x="476" y="315" fill="#7b9399" font-size="10.5">Qwen3.8-35B-A3B (IQ3_M) on an RTX 4090, measured</text>
+  <text x="476" y="340" fill="#b7c9cc" font-size="11">one lane</text>
+  <rect x="476" y="345" width="29" height="16" rx="4" fill="#7b9399"/>
+  <text x="513" y="358" fill="#e4eef0" font-size="12" font-weight="700">191</text>
+  <text x="476" y="380" fill="#b7c9cc" font-size="11">158 lanes, over the whole answer</text>
+  <rect x="476" y="385" width="215" height="16" rx="4" fill="#8b6cff" fill-opacity=".75"/>
+  <text x="699" y="398" fill="#e4eef0" font-size="12" font-weight="700">1,406</text>
+  <text x="476" y="420" fill="#b7c9cc" font-size="11">158 lanes, best second</text>
+  <rect x="476" y="425" width="360" height="16" rx="4" fill="#8b6cff"/>
+  <text x="828" y="438" fill="#f6f3ff" font-size="12" font-weight="700" text-anchor="end">2,353</text>
+  <text x="476" y="461" fill="#7b9399" font-size="10.5">One long article: 24,747 tokens in 17.6 s.</text>
 </svg>
