@@ -885,7 +885,8 @@ def pick(cands, others):
 # never release them. A function, set by their owner, that gives their session numbers now.
 PINNED = lambda: ()
 # The priority of this thread's engine calls ("high", "normal", "low"; None = the engine's default, normal): set by the
-# API for a request that asks for one, so that the parked texts it reads are read at that priority too.
+# API for a request that asks for one, so that the parked texts it reads are read at that priority too. PRIO.tag: the
+# engine's tag for them, so that POST /cancel {"tag"} ends such a read when the API's client goes away.
 PRIO = threading.local()
 
 
@@ -1045,6 +1046,8 @@ class Fan:
             raise Stopped()
         if getattr(PRIO, "p", None) and "priority" not in body and path != "/release":
             body = {**body, "priority": PRIO.p}
+        if getattr(PRIO, "tag", None) and "tag" not in body and path != "/release":
+            body = {**body, "tag": PRIO.tag}          # (the API's request can then be cancelled while this is read)
         r = urllib.request.Request(self.url + path, data=json.dumps(body).encode(), headers={"content-type": "application/json"})
         if getattr(self, "call_timeout", None):
             timeout = min(timeout, self.call_timeout)
@@ -1060,6 +1063,8 @@ class Fan:
         """One /fork call (or /spec, which answers in the same form). -> the final event {"done": [...], "timings": {...}}"""
         if getattr(PRIO, "p", None) and "priority" not in body and path != "/release":
             body = {**body, "priority": PRIO.p}
+        if getattr(PRIO, "tag", None) and "tag" not in body and path != "/release":
+            body = {**body, "tag": PRIO.tag}          # (the API's request can then be cancelled while this is read)
         r = urllib.request.Request(self.url + path, data=json.dumps(body).encode(), headers={"content-type": "application/json"})
         fin = None
         if getattr(self, "call_timeout", None):

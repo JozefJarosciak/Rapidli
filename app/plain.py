@@ -394,6 +394,38 @@ def read(fan, eng, base, text, images, name=None):
         c.done()
 
 
+def read_cancellable(fan, eng, base, text, images, cancel):
+    """read(), ended at once when `cancel` is set (the engine is told by a tag: a client that closed its connection
+    while its long prompt was read held the lane until the whole prompt was read). -> session; ApiError 499 when
+    cancelled"""
+    tag = uuid.uuid4().hex
+    stop = threading.Event()
+
+    def watch():
+        while not stop.wait(0.05):
+            if cancel.is_set():
+                try:
+                    eng.post("/cancel", {"tag": tag}, timeout=5)
+                except Exception:
+                    pass
+                return
+    threading.Thread(target=watch, daemon=True).start()
+    F.PRIO.tag = tag
+    try:
+        sid = read(fan, eng, base, text, images)
+    except ApiError:
+        if cancel.is_set():
+            raise ApiError("cancelled", 499)
+        raise
+    finally:
+        stop.set()
+        F.PRIO.tag = None
+    if cancel.is_set():
+        eng.release(sid)
+        raise ApiError("cancelled", 499)
+    return sid
+
+
 def create(fan, eng, messages, ttl=None, max_contexts=0):
     """POST /api/v1/contexts. -> (Ctx, limit)"""
     limit, lane, slots, used = limits(eng)
@@ -566,7 +598,12 @@ class Reply:
             if images or n_new + 32 >= lane:
                 # read first into a parked state of its own (a lane reads at most its own size; images go through
                 # /media), then the reply is written from it; that state is let go once the reply has its copy
-                base = read(self.fan, self.eng, base, new, images)
+                try:
+                    base = read_cancellable(self.fan, self.eng, base, new, images, self.cancel)
+                except ApiError as e:
+                    if e.code == 499:             # (cancelled while it was read)
+                        return prefill, "cancelled"
+                    raise
                 let_go()                          # (the context's state has been copied into this one)
                 to_release = base
                 head = doc.reply(prefill)

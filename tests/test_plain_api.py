@@ -99,6 +99,11 @@ class EngineH(BaseHTTPRequestHandler):
             got = next((k for k, v in FE["sessions"].items() if v["name"] == b.get("name")), -1)
             return self.js({"session": got, "cached": got >= 0})
         if b.get("read_only"):
+            t0 = time.time()
+            while time.time() - t0 < Fake.read_delay:     # (a long prompt being read: a tag can cancel it)
+                if b.get("tag") and b["tag"] in FE["cancelled"]:
+                    return self.js({"session": -1, "stop": "cancelled", "content": "", "tokens_evaluated": 0, "tokens_predicted": 0})
+                time.sleep(0.01)
             name = b.get("name") or ""
             if name:
                 got = next((k for k, v in FE["sessions"].items() if v["name"] == name), -1)
@@ -321,6 +326,21 @@ s.close()
 time.sleep(0.8)
 calls = list(FE["cancel_calls"])
 check("closing the connection while the prompt is read tells the engine at once (/cancel by tag)", calls and calls[0][1] - t_close < 0.6, calls)
+# ... also a prompt longer than a lane, which is read into a parked state of its own first
+Fake.lane = 60
+FE["cancel_calls"].clear()
+s = socket.create_connection(("127.0.0.1", APORT))
+req = json.dumps({"mode": "plain", "stream": True, "messages": [{"role": "user", "content": "long " * 400}]}).encode()
+s.sendall(b"POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:" + str(APORT).encode() + b"\r\nContent-Type: application/json\r\nContent-Length: " + str(len(req)).encode() + b"\r\n\r\n" + req)
+time.sleep(0.6)
+t_close = time.time()
+s.close()
+time.sleep(0.8)
+calls = list(FE["cancel_calls"])
+reads = [b for p, b in FE["bodies"] if p == "/completion" and b.get("read_only") and b.get("tag")]
+check("... also while a prompt longer than a lane is read into its own parked state (the read carries the tag)",
+      calls and calls[0][1] - t_close < 0.6 and reads and calls[0][0] == reads[-1]["tag"], (calls, [r.get("tag") for r in reads]))
+Fake.lane = 400
 Fake.read_delay = 0.0
 
 # errors come as an error event, never as answer text

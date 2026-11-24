@@ -942,6 +942,10 @@ def adopted_fit(m, st):
 def startup(choice=None, start=True):
     model_list()
     st = engine_stats()
+    # (a load asked for while the models were looked for - by the page or the API - is not undone: it had its model
+    # taken back to "no model loaded" here, and the app then said "ready" with no model, 24 Nov)
+    if STATE["status"] != "starting":
+        return
     want = None
     if choice:
         want = find_model(choice)

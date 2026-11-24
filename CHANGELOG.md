@@ -37,6 +37,17 @@ For live copilots, agents and document tools (docs/API.md › Many related reque
   `llama_fq_set_sampling_p` when `llama.dll` has it (new `engine/llama/patch_ztopp.py` and
   `engine/cuda/patch_ztopp.py`: top-p in the fused sampling kernel); text that continues a parked state no longer
   starts with a second start-of-text token (Gemma); `/stats` adds `busy`, `queued`, `top_p`.
+- A plain request whose prompt is longer than a lane (read into a parked state of its own first) is cancelled at once too
+  when its client goes away: that read carries the request's tag (`fan.PRIO.tag`).
+- Fixed: a load asked for while the app was still looking for models at its start was undone ("ready" with no model).
+- Checked on the card, Windows and Linux (WSL 2, the Linux engine built with `engine/build-linux.sh`, sm_75/86/89):
+  19 of 19 live checks each (Ternary-Bonsai-2.5-27B on Windows, Ternary-Bonsai-2-27B on Linux): plain replies, seed,
+  top_p (6 different replies of 6 at top_p 1, one at top_p 0.05), replies longer than a lane, contexts (first token
+  0.05-0.09 s after a 4,000-token context, 1.2-1.3 s when the text is sent each time), append, fork, batches and
+  cancelling one, a JSON schema, priority, a lane freed 0.15 s after its client closed during a read, the status
+  events. With Inkling-2-Mini and its vision projector: the Inkling format, an image read in plain mode and after a
+  context, and a plain request that starts in 0.11 s while 4 answers run and a fifth waits (parallel_max 4).
+  Load options: a load with at most 48 lanes and no drafting, the settings untouched.
 - Settings › API shows plain mode and contexts with an example. `tests/test_plain_api.py` (offline, a fake engine)
   covers the routes; it is in `tests/run_offline`.
 
