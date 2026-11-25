@@ -369,17 +369,20 @@ def scan(refresh=False):
     return chat
 
 
-def projector(path):
-    """The vision projector (mmproj-*.gguf) in the model's folder, or None: 16-bit preferred, then 8-bit, then 32-bit."""
+def projectors(path):
+    """The vision projectors (mmproj-*.gguf) in the model's folder, the preferred one first: 16-bit, then 8-bit, then 32-bit."""
     d = os.path.dirname(path)
     try:
         cands = [f for f in os.listdir(d) if f.lower().endswith(".gguf") and "mmproj" in f.lower()]
     except OSError:
-        return None
-    if not cands:
-        return None
+        return []
     rank = lambda f: (0 if re.search(r"f16|bf16", f, re.I) else 1 if re.search(r"q8", f, re.I) else 2 if re.search(r"f32", f, re.I) else 3, f)
-    return os.path.join(d, sorted(cands, key=rank)[0])
+    return [os.path.join(d, f) for f in sorted(cands, key=rank)]
+
+
+def projector(path):
+    """The vision projector loaded with a model unless another is chosen, or None."""
+    return next(iter(projectors(path)), None)
 
 
 if __name__ == "__main__":

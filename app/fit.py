@@ -227,8 +227,10 @@ def load_fits():
 
 def fit_key(path, mtp=False, ctx_extra=8192, mmproj=None, margin=1200, lanes_max=None):
     """The key under which a fit of these settings is kept in data/fit.json (one with a lane maximum from the API is
-    kept apart: it must not cap the model's own fit)."""
-    return (f"{path}|{os.path.getsize(path)}|{ctx_extra}|{bool(mtp)}" + ("|vision" if mmproj else "") + (f"|margin{margin}" if margin != 1200 else "")
+    kept apart: it must not cap the model's own fit; so is one with a smaller projector than the usual 16-bit one)."""
+    pn = os.path.basename(mmproj or "").lower()
+    vis = "" if not mmproj else "|vision" + (":" + pn if "mmproj" in pn and "f16" not in pn and pn != "mmproj.gguf" else "")
+    return (f"{path}|{os.path.getsize(path)}|{ctx_extra}|{bool(mtp)}" + vis + (f"|margin{margin}" if margin != 1200 else "")
             + (f"|lookup{LOOKUP}" if LOOKUP else "") + (f"|max{int(lanes_max)}" if lanes_max else ""))
 
 
@@ -612,6 +614,7 @@ def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=p
             common["ctx_extra"] = 16384
         return fit_moe(path, sp, common, margin, port, say, note, cap(lanes_fixed or MOE_LANES) if lanes_max else lanes_fixed, key)
     # 0. a model fitted before: start with its lanes and check that nothing spilled
+    asked, asked_vault = dict(common), vault
     if reuses(key, fresh, lanes_fixed):
         f0 = fits[key]
         common["ctx_extra"] = int(f0.get("ctx_extra") or common["ctx_extra"])
@@ -645,7 +648,8 @@ def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=p
             roomy = (total - used - margin_with(margin, holders(eng.pid(port)))
                      > max(10, 0.2 * f0["lanes"]) * f0.get("per_lane_mb", 60) * LANE_EXTRA)
             whole = all_ok(f0["lanes"], ma, ms) and (not f0.get("pass_ms_all") or ma <= f0["pass_ms_all"] * 1.8 + 6)
-            if roomy and f0["lanes"] < MAX_SEQ - vault:
+            # (not when a program's lane maximum is reached: its every load was fitted again, 25 Nov)
+            if roomy and f0["lanes"] < cap(MAX_SEQ - vault):
                 say("the card has room for more lanes than when fitted: fitting again")
                 note("refit")
             elif whole and ms <= f0["pass_ms_8"] * 1.6 + 4 and (not f0.get("spec_s") or (ss <= f0["spec_s"] * 3 + 0.5 and ss <= SPEC_SPILL_S)):
@@ -654,6 +658,10 @@ def fit(path, mtp=False, ctx_extra=8192, margin=1200, vault=8, port=11832, say=p
             else:
                 say("slower than when fitted (other programs hold more of the card now): fitting again")
                 note("refit")
+        # (fitted again from what was asked for, with the engine's own memory given back: measured beside the engine of
+        # the kept fit, the probe cut a 16k conversation context to 8k and the parked states from 34 to 8, 25 Nov)
+        eng.stop(port)
+        common, vault = dict(asked), asked_vault
     # 1. the probe
     cut = probe_budget(path, common, margin, mmproj)
     if cut:

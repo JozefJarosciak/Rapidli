@@ -28,6 +28,7 @@ class Fake:
     lane = 400                 # tokens a lane holds (ctx_lane)
     read_delay = 0.0           # seconds before the first written token (a long prompt being read)
     reply = None               # a function body -> the text the "model" writes (word by word); None: "w0 w1 w2 ..."
+    vision = True              # False: the model was loaded without its projector
     v5 = True                  # False: an engine before version 5 (its /stats has no "busy")
 
 
@@ -55,7 +56,7 @@ class EngineH(BaseHTTPRequestHandler):
             with FE["lock"]:
                 n = len(FE["sessions"])
             st = {"lanes": 16, "ctx_lane": Fake.lane, "ctx_extra": 8192, "session_slots": 20, "vault": 20, "sessions": n,
-                  "busy": 0, "queued": 0, "vision": True, "top_p": True, "spec": 0}
+                  "busy": 0, "queued": 0, "vision": Fake.vision, "top_p": True, "spec": 0}
             if not Fake.v5:
                 for k in ("busy", "queued", "top_p"):
                     st.pop(k)
@@ -403,9 +404,114 @@ check("... the batch's priority goes to each request", all(b.get("priority") == 
 Fake.reply = None
 
 # ------------------------------------------------------------------------------------------------ load options, status
+FT = R.fit
+keep_fit = {k: getattr(FT, k) for k in ("load_fits", "probe_budget", "card", "workout", "pass_ms_warm", "all_ms", "spec_s", "holders", "all_ok", "moe_split")}
+keep_eng = {k: getattr(FT.eng, k) for k in ("start", "stop", "pid")}
+keep_open, trail, kept = FT.urllib.request.urlopen, [], {"lanes": 32}
+
+
+class Refit(Exception):
+    pass
+
+
+def fake_budget(path, common, *a, **k):
+    if "start" in [t[0] for t in trail]:          # (the second time: a refit)
+        trail.append(("budget", dict(common)))
+        raise Refit()
+    return {"vault": 34}
+
+
+FT.load_fits = lambda: {FT.fit_key(__file__, False, 16384, None, 1000, 32): {"lanes": kept["lanes"], "ctx_extra": 16384, "pass_ms_8": 15.0, "pass_ms_all": 25.0, "per_lane_mb": 65}}
+FT.probe_budget, FT.card, FT.workout = fake_budget, (lambda: (9000, 24564)), (lambda *a, **k: 1.0)
+FT.pass_ms_warm, FT.all_ms, FT.spec_s = (lambda *a, **k: 15.0), (lambda *a, **k: 25.0), (lambda *a, **k: None)
+FT.holders, FT.all_ok, FT.moe_split = (lambda *a: []), (lambda *a: True), (lambda *a, **k: None)
+FT.eng.start, FT.eng.pid = (lambda **k: trail.append(("start", k))), (lambda *a: 1)
+FT.eng.stop = lambda *a: trail.append(("stop",))
+FT.urllib.request.urlopen = lambda *a, **k: __import__("io").BytesIO(b"{}")
+try:
+    out = FT.fit(__file__, ctx_extra=16384, margin=1000, lanes_max=32, say=lambda *a: None)
+    check("a kept fit at a program's lane maximum is not fitted again, however much the card has free", out.get("cached") and out["lanes"] == 32, out)
+    kept["lanes"] = 19
+    trail.clear()
+    try:
+        FT.fit(__file__, ctx_extra=16384, margin=1000, lanes_max=32, say=lambda *a: None)
+    except Refit:
+        pass
+    check("... below it, it is: the engine stopped first, with the context and the parked states asked for",
+          [t[0] for t in trail] == ["start", "stop", "budget"] and trail[2][1]["ctx_extra"] == 16384 and trail[2][1]["vault"] != 34, trail)
+finally:
+    for k, v in keep_fit.items():
+        setattr(FT, k, v)
+    for k, v in keep_eng.items():
+        setattr(FT.eng, k, v)
+    FT.urllib.request.urlopen = keep_open
+img = [{"role": "user", "content": [{"type": "text", "text": "what is this?"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}]}]
+Fake.vision = False
+s0, r0 = call("POST", "/v1/chat/completions", {"mode": "plain", "messages": img, "max_tokens": 5})
+check("an image for a model loaded without vision: 400, and how to load it", s0 == 400 and "without vision" in json.dumps(r0), (s0, r0))
+s0, r0 = call("POST", "/api/v1/contexts", {"messages": img})
+check("... in a context too", s0 == 400 and "without vision" in json.dumps(r0), (s0, r0))
+Fake.vision = True
 o, bad = R.load_options({"lanes": 32, "context": 16384, "margin_mb": 1500, "vision": False, "drafting": False})
 check("load options are read", bad is None and o == {"lanes": 32, "context": 16384, "margin_mb": 1500, "vision": False, "drafting": False}, (o, bad))
 check("... and wrong ones refused", R.load_options({"lanes": "many"})[1] and R.load_options({"context": 100})[1] and R.load_options({"vision": "yes"})[1])
+import tempfile        # noqa: E402
+with tempfile.TemporaryDirectory() as td:
+    def put(n, k=1):
+        open(os.path.join(td, n), "wb").write(b"x" * (k * 2**20))
+        return os.path.join(td, n)
+    vm = {"id": "t:vis", "file": "m.gguf", "path": put("m.gguf"), "bytes": 2**20, "repo": "t"}
+    old_state, R.STATE_FILE = R.STATE_FILE, os.path.join(td, "state.json")
+    old_load, engine_on = R.settings.load, {"v": True}
+    R.settings.load = lambda *a, **k: {**old_load(*a, **k), "engine": {**old_load(*a, **k)["engine"], "vision": engine_on["v"]}}
+    try:
+        base = lambda x: os.path.basename(x or "") or None
+        check("vision: a model without a projector", R.vision_pick(vm) is None and R.vision_info(vm)["vision_files"] == [] and not R.vision_info(vm)["vision_on"])
+        put("m-mmproj-Q8_0.gguf", 2)
+        put("m-mmproj-BF16.gguf", 3)
+        check("... projectors downloaded later are found, the 16-bit one first", [x["file"] for x in R.vision_info(vm)["vision_files"]] == ["m-mmproj-BF16.gguf", "m-mmproj-Q8_0.gguf"]
+              and R.vision_info(vm)["vision_files"][0]["mb"] == 3, R.vision_info(vm))
+        check("... a load picks one, the other, or none", (base(R.vision_pick(vm, True)), base(R.vision_pick(vm, "M-mmproj-q8_0.gguf")), R.vision_pick(vm, False)) == ("m-mmproj-BF16.gguf", "m-mmproj-Q8_0.gguf", None))
+        engine_on["v"] = False
+        check("... without a choice of its own the setting decides", R.vision_pick(vm) is None)
+        R.save_state({"vision": {"t:vis": "m-mmproj-Q8_0.gguf"}})
+        check("... the model's own choice goes before the setting", base(R.vision_pick(vm)) == "m-mmproj-Q8_0.gguf")
+        engine_on["v"] = True
+        R.save_state({"vision": {"t:vis": False}})
+        check("... also when it is off", R.vision_pick(vm) is None and R.vision_info(vm)["vision_on"] is False and base(R.vision_pick(vm, True)) == "m-mmproj-BF16.gguf")
+        k = lambda n: R.fit.fit_key(vm["path"], mmproj=os.path.join(td, n))
+        check("... a smaller projector keeps a fit of its own", "|vision" in k("m-mmproj-BF16.gguf") and "|vision:" not in k("m-mmproj-BF16.gguf") and "|vision:m-mmproj-q8_0.gguf" in k("m-mmproj-Q8_0.gguf"))
+        old_models, old_now, old_lm = R.STATE["models"], {x: R.STATE.get(x) for x in ("model", "status", "fit", "load_opts", "load_opts_model")}, R.load_model
+        loads = []
+        R.load_model = lambda *a, **kw: loads.append(a)
+        try:
+            R.STATE["models"] = [vm]
+            s1, r1 = call("POST", "/api/v1/models/load", {"model": "t:vis", "vision": "other-mmproj.gguf"})
+            check("API load: a projector the model does not have is refused, with the ones it has", s1 == 400 and "m-mmproj-BF16.gguf" in json.dumps(r1) and not loads, (s1, r1))
+            s2, r2 = call("POST", "/api/v1/models/load", {"model": "t:vis", "vision": "m-mmproj-Q8_0.gguf"})
+            time.sleep(0.2)
+            check("... one it has is loaded", s2 == 202 and loads and loads[-1][3] == {"vision": "m-mmproj-Q8_0.gguf"}, (s2, r2, loads))
+            s3, r3 = call("GET", "/api/v1/models")
+            mi = next(x for x in r3["models"] if x["id"] == "t:vis")
+            check("API models: the projectors and what a load would use", mi["vision"] is True and len(mi["vision_files"]) == 2 and mi["vision_on"] is False and mi["vision_pick"] is None, mi)
+            # the page's choice: kept for the model; the loaded model is loaded again with the program's other options
+            R.STATE.update(model=vm, status="ready", fit={"vision": False}, load_opts={"lanes": 32, "vision": False}, load_opts_model="t:vis")
+            loads.clear()
+            s4, r4 = call("POST", "/api/vision", {"id": "t:vis", "vision": True})
+            time.sleep(0.2)
+            check("the app's choice loads the model again, keeping the lanes a program asked for", s4 == 200 and r4["reloading"] and loads and loads[-1][3] == {"lanes": 32}
+                  and json.load(open(R.STATE_FILE, encoding="utf8"))["vision"]["t:vis"] is True, (s4, r4, loads))
+            R.STATE.update(fit={"vision": True, "vision_file": "m-mmproj-BF16.gguf"})
+            loads.clear()
+            s5, r5 = call("POST", "/api/vision", {"id": "t:vis", "vision": True})
+            check("... and not when it is already loaded so", s5 == 200 and not r5["reloading"] and not loads, (s5, r5))
+            s6, r6 = call("POST", "/api/vision", {"id": "t:vis", "vision": "no.gguf"})
+            check("... a projector it does not have is refused", s6 == 400, (s6, r6))
+        finally:
+            R.load_model = old_lm
+            R.STATE.update(models=old_models, **old_now)
+    finally:
+        R.STATE_FILE, R.settings.load = old_state, old_load
 check("a lane maximum keeps its fit apart from the model's own", R.fit.fit_key(__file__, lanes_max=24).endswith("|max24") and "|max" not in R.fit.fit_key(__file__))
 st, s = call("GET", "/api/v1/status")
 check("status: free lanes, context limit and use, free context places, vision, template, GPU memory, load progress",

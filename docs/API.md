@@ -58,11 +58,14 @@ llama.cpp, and the folders added in Settings › Models).
 {"models": [
   {"id": "empero-ai/Qwen3.8-35B-A3B-Distill-GGUF:Qwen3.8-35B-A3B-IQ3_M", "label": "Qwen3.8-35B-A3B-IQ3_M",
    "repo": "empero-ai/Qwen3.8-35B-A3B-Distill-GGUF", "gb": 15.2, "arch": "qwen35moe", "context": 262144,
-   "vision": false, "mtp": true, "source": "Rapidli", "loaded": true, "loading": false}
+   "vision": true, "vision_files": [{"file": "mmproj-F16.gguf", "mb": 858}], "vision_on": true, "vision_pick": "mmproj-F16.gguf",
+   "mtp": true, "source": "Rapidli", "loaded": true, "loading": false}
 ]}
 ```
 
-`vision`: the model sees images (its projector is next to it). `mtp`: it drafts tokens ahead with its own MTP head.
+`vision`: the model can see images (a vision projector is next to it). `vision_files`: its projectors, the preferred one
+first; `vision_on` and `vision_pick`: whether a load without `"vision"` uses one, and which (the choice made in the app
+for this model, else Settings › Engine). `mtp`: it drafts tokens ahead with its own MTP head.
 `loaded` / `loading`: the model in use now.
 
 ### `POST /api/v1/models/load`
@@ -75,7 +78,7 @@ llama.cpp, and the folders added in Settings › Models).
 | `lanes` | the most lanes to start (1 to 256; at least 8 are started). Rapidli still fits to the card: fewer start when fewer fit |
 | `context` | tokens of conversation context (`2048` or more), or `"auto"`: the parked conversations and the API's contexts live in it |
 | `margin_mb` | graphics memory left free beside the lanes, in MB |
-| `vision` | `false`: the vision projector is not loaded (about 0.9 GB more for lanes); `true`: loaded when the model has one |
+| `vision` | `true`: loaded with the model's preferred projector when it has one; `false`: without (about 0.9 GB more for lanes); a file name of its `vision_files`: with that one (`400` when it has no such file). Left out: the choice made in the app |
 | `drafting` | `false`: no drafting by the model's MTP head |
 
 `lanes`, `context`, `margin_mb`, `vision` and `drafting` are for this load only: the settings are not changed. A refit
@@ -87,7 +90,8 @@ Loading fits as many lanes as the card has room for; the fit of a model is kept,
 time. A big model can take minutes. Answers being written when another model is loaded are stopped.
 
 ```json
-{"status": "ready", "model": {"id": "…", "label": "Qwen3.8-35B-A3B-IQ3_M", "loaded": true}, "lanes": 115}
+{"status": "ready", "model": {"id": "…", "label": "Qwen3.8-35B-A3B-IQ3_M", "loaded": true}, "lanes": 115,
+ "vision": true, "vision_file": "mmproj-F16.gguf"}
 ```
 
 The model already loaded answers `{"status": "ready", "already": true, …}` at once. A model that is being loaded
@@ -245,7 +249,7 @@ And [JSON replies](#json-replies) (`response_format`) for replies that a program
   streamed; never as answer text.
 - **Closing the connection** frees the lane at once, also while the prompt is still being read.
 - **Images**: `image_url` parts (a `data:` URL or an http(s) address) are read when the model sees images
-  (`"vision": true` in the status).
+  (`"vision": true` in the status); without vision loaded the request is refused with `400`.
 - With `"stream_options": {"include_usage": true}` a last chunk with empty `choices` carries the usage too (it is
   always on the chunk with the `finish_reason`).
 
@@ -359,7 +363,7 @@ once it has passed.
  "lanes_busy": 12, "lanes_free": 96, "queued": 0,
  "context": {"limit": 32768, "lane": 512, "contexts": 2, "contexts_max": 5, "contexts_tokens": 6100},
  "context_places": {"slots": 11, "used": 6, "free": 5},
- "vision": false, "template": "inkling", "top_p": true, "plain_mode": true, "plain": {"running": 3, "max": 0},
+ "vision": false, "vision_file": null, "can_see": true, "template": "inkling", "top_p": true, "plain_mode": true, "plain": {"running": 3, "max": 0},
  "gpu": {"name": "NVIDIA GeForce RTX 4090", "total_mb": 24564, "used_mb": 22900, "free_mb": 1664, "model_mb": 8500, "per_lane_mb": 61},
  "load": null, "load_options": {"lanes": 64}}
 ```
@@ -370,7 +374,8 @@ once it has passed.
   in one go (longer text is read into a parked state first, by itself). `contexts`, `contexts_max`,
   `contexts_tokens`: the API's contexts now, the most there can be, the tokens they hold.
 - `context_places`: the engine's places for parked states (the app's own conversations and layouts use some).
-- `vision`: images can be read; `template`: the model's chat format (`chatml`, `gemma4`, `inkling`); `top_p`: the
+- `vision`: images can be read now; `vision_file`: with which projector (`null` when not known: the app was restarted
+  beside a running engine); `can_see`: the model has a projector, loaded or not; `template`: the model's chat format (`chatml`, `gemma4`, `inkling`); `top_p`: the
   engine applies `top_p` (with an older `llama.dll` it is accepted and not applied).
 - `plain_mode`: the engine can write plain replies (version 5; an older engine answers them with `501`). `plain`: plain
   requests and batches being written, and their limit (`0`: none of their own).
@@ -480,6 +485,7 @@ What the page itself uses, on this PC only (not reachable from other computers, 
 | `POST /api/model` | `{"id", "refit"?}` | loads a model (fits the lanes; `refit` fits again) |
 | `POST /api/unload` | `{}` | stops the engine |
 | `POST /api/context` | `{"ctx": "auto" or tokens}` | sets the conversation context of the current model and reloads it |
+| `POST /api/vision` | `{"id"?, "vision": true, false or a file of its vision_files}` | chooses whether that model (the current one without `id`) is loaded with vision; the loaded model is loaded again when that changes it (`reloading`) |
 | `GET /api/system[?programs=1]` | | card (`gpu`), PC memory (`ram`), `disk`, `engine` (model, lanes and context memory), `programs` using the card |
 | `GET /api/settings`, `POST /api/settings` | `{"changes": {section: {key: value}}}` | the settings (the Hugging Face token is never sent back) |
 | `GET /api/chats` | | conversations, newest first |

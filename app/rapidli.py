@@ -492,19 +492,56 @@ def load_options(b):
         if not isinstance(b["margin_mb"], int) or not 0 <= b["margin_mb"] <= 32000:
             return None, "margin_mb: graphics memory left free, MB (0 to 32000)"
         o["margin_mb"] = b["margin_mb"]
-    for k in ("vision", "drafting"):
-        if b.get(k) is not None:
-            if not isinstance(b[k], bool):
-                return None, k + ": true or false"
-            o[k] = b[k]
+    if b.get("vision") is not None:
+        if not (isinstance(b["vision"], bool) or (isinstance(b["vision"], str) and b["vision"].lower().endswith(".gguf"))):
+            return None, "vision: true, false, or the file name of one of the model's projectors (vision_files in GET /api/v1/models)"
+        o["vision"] = b["vision"]
+    if b.get("drafting") is not None:
+        if not isinstance(b["drafting"], bool):
+            return None, "drafting: true or false"
+        o["drafting"] = b["drafting"]
     return o, None
+
+
+def vision_files(m):
+    """The vision projectors a model can be loaded with, the preferred one first (looked up now: one may have been
+    downloaded since the models were listed)."""
+    given = m.get("mmproj_given")
+    return [given] if given and os.path.isfile(given) else models.projectors(m["path"]) if m.get("path") else []
+
+
+def vision_setting(m):
+    """Whether a model is loaded with vision: its own choice (made in the app: True, False or a projector's file name),
+    else the setting for every model."""
+    try:
+        v = json.load(open(STATE_FILE, encoding="utf8")).get("vision", {}).get(m["id"])
+    except Exception:
+        v = None
+    return v if isinstance(v, (bool, str)) else bool(settings.load()["engine"].get("vision", True))
+
+
+def vision_pick(m, want=None):
+    """The projector file to load a model with, or None. want: True, False or a file name; None = the model's setting.
+    A chosen file that is no longer there: the preferred one."""
+    want = vision_setting(m) if want is None else want
+    files = vision_files(m)
+    if want is False or not files:
+        return None
+    if isinstance(want, str):
+        return next((x for x in files if os.path.basename(x).lower() == want.lower()), files[0])
+    return files[0]
+
+
+def vision_info(m):
+    return {"vision_files": [{"file": os.path.basename(x), "mb": round(os.path.getsize(x) / 2**20)} for x in vision_files(m) if os.path.isfile(x)],
+            "vision_on": bool(vision_pick(m)), "vision_pick": os.path.basename(vision_pick(m) or "") or None}
 
 
 def api_model(m):
     cur = STATE.get("model") or {}
     here = m["id"] == cur.get("id")
     return {"id": m["id"], "label": label(m), "repo": m["repo"], "gb": round(m["bytes"] / 2**30, 1), "arch": m.get("arch"),
-            "context": m.get("context"), "vision": bool(m.get("mmproj")), "mtp": bool(m.get("mtp")), "source": m.get("source") or "",
+            "context": m.get("context"), "vision": bool(vision_files(m)), **vision_info(m), "mtp": bool(m.get("mtp")), "source": m.get("source") or "",
             "loaded": here and STATE["status"] == "ready", "loading": here and STATE["status"] == "loading"}
 
 
@@ -525,7 +562,7 @@ OTHER_APPS = ("LM Studio", "Jan", "GPT4All", "Unsloth Studio", "Ollama")     # f
 
 def model_files(m):
     """What deleting a model removes: [(path, bytes)]. Every part of a split model; the file a Hugging Face cache link
-    points to (the link alone frees nothing); the vision projector next to it when no other model in that folder uses it."""
+    points to (the link alone frees nothing); the vision projectors next to it when no other model in that folder uses them."""
     folder, fn = os.path.dirname(m["path"]), os.path.basename(m["path"])
     if m.get("parts", 1) > 1 and SPLIT_PART.search(fn):
         stem = SPLIT_PART.sub("", fn)
@@ -533,10 +570,8 @@ def model_files(m):
     else:
         names = [fn]
     paths = [os.path.join(folder, x) for x in names]
-    mm = m.get("mmproj")
-    if mm and os.path.isfile(mm) and os.path.normcase(os.path.dirname(mm)) == os.path.normcase(folder) and not any(
-            o["id"] != m["id"] and os.path.normcase(os.path.dirname(o["path"])) == os.path.normcase(folder) for o in (STATE["models"] or [])):
-        paths.append(mm)
+    if not any(o["id"] != m["id"] and os.path.normcase(os.path.dirname(o["path"])) == os.path.normcase(folder) for o in (STATE["models"] or [])):
+        paths += [x for x in vision_files(m) if os.path.isfile(x) and os.path.normcase(os.path.dirname(x)) == os.path.normcase(folder)]
     out, seen = [], set()
     for p in paths:
         for q in ([p, os.path.realpath(p)] if os.path.islink(p) else [p]):
@@ -692,7 +727,7 @@ def load_model(m, fresh=False, why=None, opts="keep"):
             plainmod.CONTEXTS.clear()             # (the engine is stopped: the API's contexts go with it)
             try:
                 es = settings.load()["engine"]
-                mmproj = m.get("mmproj") if opts.get("vision", es.get("vision", True)) else None
+                mmproj = vision_pick(m, opts.get("vision"))
                 lanes_fixed = es.get("lanes") if isinstance(es.get("lanes"), int) else None
                 lanes_max = int(opts["lanes"]) if opts.get("lanes") else None
                 if lanes_max and lanes_fixed:         # ("lanes" from the API is a maximum)
@@ -740,7 +775,7 @@ def load_model(m, fresh=False, why=None, opts="keep"):
                     print("warm failed:", str(e)[:200], flush=True)
                 STATE["fan"] = fn
                 load_record(key, ld["mode"], gb, time.time() - ld["mode_t0"])
-                STATE.update(status="ready", fit={**res, "template": kind, "think": think}, loaded_at=time.time(), load=None,
+                STATE.update(status="ready", fit={**res, "template": kind, "think": think, "vision_file": os.path.basename(mmproj) if mmproj and res.get("vision") else None}, loaded_at=time.time(), load=None,
                              message=f"{res['lanes']} lanes" + (", drafting by the MTP head" + (" and by copying" if res.get("spec_lookup") else "") if res.get("spec_mtp") else ", drafting by copying" if res.get("spec_lookup") else "") + (", sees images" if res.get("vision") else "")
                              + (f", experts in the PC's memory ({res['moe']['experts_gb']:.0f} GB; {(res['moe']['cache_mib'] + res['moe']['spec_mib']) / 1024:.1f} GB of them cached on the card)" if res.get("moe") else "")
                              + "".join(f" · {n} holds {mb / 1024:.1f} GB of the card" for n, mb in (res.get("others") or [])[:2]))
@@ -2464,6 +2499,10 @@ class Handler(BaseHTTPRequestHandler):
             opts, bad = load_options(b)
             if bad:
                 return self.api_error(bad, 400)
+            names = [os.path.basename(x) for x in vision_files(mm)]
+            if isinstance(opts.get("vision"), str) and opts["vision"].lower() not in [x.lower() for x in names]:
+                return self.api_error("vision: this model has no projector " + opts["vision"][:200]
+                                      + (" (it has: " + ", ".join(names) + ")" if names else " (none is in its folder)"), 400)
             refit = bool(b.get("refit"))
             now_opts = STATE.get("load_opts") if STATE.get("load_opts_model") == mm["id"] else None
             if m.get("id") == mm["id"] and STATE["status"] == "ready" and not refit and (opts or None) == (now_opts or None):
@@ -2476,7 +2515,8 @@ class Handler(BaseHTTPRequestHandler):
             if STATE["status"] != "ready":
                 return self.api_error("the model did not load: " + str(STATE["message"])[:300], 500)
             st = engine_stats() or {}
-            return self.send_json({"status": "ready", "model": api_model(mm), "lanes": st.get("lanes")})
+            return self.send_json({"status": "ready", "model": api_model(mm), "lanes": st.get("lanes"), "vision": bool(st.get("vision")),
+                                   "vision_file": (STATE.get("fit") or {}).get("vision_file")})
         if p == "/api/v1/models/unload":
             if STATE["status"] == "loading":
                 return self.api_error("a model is being loaded", 409)
@@ -2586,7 +2626,8 @@ class Handler(BaseHTTPRequestHandler):
                 "context": {"limit": limit, "lane": st.get("ctx_lane"), "contexts": len(ctxs), "contexts_max": cap,
                             "contexts_tokens": sum(c.tokens for c in ctxs)},
                 "context_places": {"slots": slots, "used": used, "free": (slots - used) if isinstance(slots, int) and isinstance(used, int) else None},
-                "vision": bool(st.get("vision")), "template": f.get("template") or (fanmod.TPL.get("kind") if st else None),
+                "vision": bool(st.get("vision")), "vision_file": f.get("vision_file") if st.get("vision") else None, "can_see": bool(m and vision_files(m)),
+                "template": f.get("template") or (fanmod.TPL.get("kind") if st else None),
                 "top_p": bool(st.get("top_p")), "plain_mode": "busy" in st,
                 "plain": {"running": len(GATE.plain), "max": int(cfg.get("plain_max") or 0)},
                 "gpu": {"name": g.get("name"), "total_mb": g.get("total_mb"), "used_mb": g.get("used_mb"),
@@ -3078,7 +3119,7 @@ class Handler(BaseHTTPRequestHandler):
                             "lanes": st.get("lanes"), "spec": st.get("spec", 0), "ctx_limit": max(st.get("ctx_extra") or 0, 8 * (st.get("ctx_lane") or 300)) if st else CTX_EXTRA,
                             "fit": STATE.get("fit") or {}, "ctx_setting": ctx_setting(m) if m else CTX_EXTRA,
                             "ctx_options": (STATE.get("fit") or {}).get("options") or [], "ctx_max": m.get("context") if m else None,
-                            "vision": bool(st.get("vision")), "can_see": bool(m and m.get("mmproj")), "engine": bool(st),
+                            "vision": bool(st.get("vision")), "can_see": bool(m and vision_files(m)), "engine": bool(st),
                             "spec_ctx": st.get("spec_ctx"), "vault": st.get("vault"), "ctx_lane": st.get("ctx_lane"), "loaded_at": STATE.get("loaded_at"),
                             "outside_engine": outside, "notes_busy": NOTES["busy"]})
         elif p == "/api/system":                 # the card, the PC's memory, the disk, and what the engine holds
@@ -3169,7 +3210,7 @@ class Handler(BaseHTTPRequestHandler):
             ms = model_list(refresh) if refresh or not STATE["models"] else STATE["models"]
             cur = STATE["model"]["id"] if STATE["model"] else None
             self.send_json({"models": [{"id": m["id"], "label": label(m), "repo": m["repo"] if "/" in m["repo"] else os.path.dirname(m["path"]), "gb": round(m["bytes"] / 2**30, 1), "arch": m.get("arch"),
-                                        "mtp": bool(m.get("mtp")), "context": m.get("context"), "current": m["id"] == cur, "vision": bool(m.get("mmproj")),
+                                        "mtp": bool(m.get("mtp")), "context": m.get("context"), "current": m["id"] == cur, "vision": bool(vision_files(m)), **vision_info(m),
                                         "path": m["path"], "layers": m.get("layers"), "quant": m.get("quant"), "experts": m.get("experts"), "split": m.get("split"),
                                         "loaded": m["id"] == cur and STATE["status"] == "ready", "source": m.get("source") or ""} for m in ms],
                             "places": models.LAST["places"], "folders": list((settings.load().get("models") or {}).get("folders") or [])})
@@ -3759,6 +3800,30 @@ class Handler(BaseHTTPRequestHandler):
             print(time.strftime("%H:%M:%S"), "context changed:", m["id"], v, flush=True)
             threading.Thread(target=load_model, args=(m, True, None, None), daemon=True).start()
             return self.send_json({"ok": True})
+        if p == "/api/vision":                    # whether a model is loaded with vision: true, false or a projector's file name
+            m = find_model(b.get("id") or "") if b.get("id") else STATE["model"]
+            v = b.get("vision")
+            names = [os.path.basename(x) for x in vision_files(m)] if m else []
+            if not m or not names or not (isinstance(v, bool) or v in names):
+                return self.send_json({"error": "no such model, or it has no such vision projector"}, 400)
+            live = bool(STATE["model"]) and STATE["model"]["id"] == m["id"] and STATE["status"] == "ready"
+            # (the model is in use: it is loaded again, unless it already is as chosen)
+            f, pick = STATE.get("fit") or {}, os.path.basename(vision_pick(m, v) or "") or None
+            change = live and (bool(f.get("vision")) != bool(pick) or (f.get("vision_file") and f["vision_file"] != pick))
+            if STATE["status"] == "loading" or (change and STATE["busy"].locked()):
+                return self.send_json({"error": "wait until the model is loaded and the answer is written"}, 409)
+            try:
+                st = json.load(open(STATE_FILE, encoding="utf8"))
+            except Exception:
+                st = {}
+            st.setdefault("vision", {})[m["id"]] = v
+            save_state({"vision": st["vision"]})
+            print(time.strftime("%H:%M:%S"), "vision:", m["id"], v, flush=True)
+            if change:                            # (the lanes and context a program asked for at the last load stay)
+                opts = STATE.get("load_opts") if STATE.get("load_opts_model") == m["id"] else None
+                opts = {k: x for k, x in (opts or {}).items() if k != "vision"}
+                threading.Thread(target=load_model, args=(m, False, None, opts or None), daemon=True).start()
+            return self.send_json({"ok": True, "reloading": bool(change), **vision_info(m)})
         if p == "/api/stop":
             # the answer of one run (the page sends its run's id) or chat; neither: every answer
             n = GATE.stop(run=b.get("run") or None, chat=b.get("chat") or None)
@@ -4076,7 +4141,7 @@ class Handler(BaseHTTPRequestHandler):
                 text = "Describe this image."
             if images and not (engine_stats() or {}).get("vision"):
                 raise ValueError("This model was loaded without a vision projector, so it cannot see images. "
-                                 "Choose a model marked 'sees images' (and keep Vision on in Settings).")
+                                 "Choose a model marked 'sees images', with its vision on (Settings, Models).")
             msgs.append({"role": "user", "content": text, "at": time.time(), **({"images": images} if images else {}), **({"search": True} if use_search else {}),
                          **({} if use_kiwix else {"kiwix": False}), **({"first": "web"} if first == "web" and use_search else {}),
                          **({"deep": True} if b.get("deep") else {}), **carried})

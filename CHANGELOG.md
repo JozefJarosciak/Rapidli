@@ -1,5 +1,27 @@
 # Changelog
 
+## Vision chosen per model (25 Nov 2026)
+
+- **A model's vision is chosen for that model**: with the **Vision** button under the message box (shown for a model
+  that has a projector), in the model menu (the loaded model: on or off), and in Settings ›
+  Models (on, off, or which projector when its folder has several). Kept in the app's state; the switch in Settings ›
+  Engine is for models with no choice of their own. Changing it for the loaded model loads it again and keeps the lanes
+  and the context a program asked for through the API (`POST /api/vision`).
+- **API**: `GET /api/v1/models` lists each model's projectors (`vision_files`) and what a load would use (`vision_on`,
+  `vision_pick`); `POST /api/v1/models/load` takes `"vision": true`, `false` or one of those files (one it does not
+  have: `400`) and answers with what was loaded; the status has `vision_file` and `can_see`.
+- An image sent in plain mode or to a context while the model has no vision loaded is refused with a `400` that says how
+  to load it (it was a `502` with the engine's words).
+- Checked on the card with Ternary-Bonsai-2.5-27B and its BF16 projector (RTX 4090): shapes, colours and text of a
+  picture in 0.8-1.5 s, the highest bar of a chart in 0.4 s, through plain mode and in the app's own answers.
+- Fixed: a load with a lane maximum (`"lanes"` from the API) was fitted again at every later load once the maximum was
+  reached, and a refit measured the card beside the engine it replaced: a 16k conversation context became 8k and 34
+  parked states 8. A refit now stops that engine first and starts from what was asked for.
+- A projector downloaded while Rapidli runs is found at the next load. A smaller projector keeps a fit of its own.
+  Deleting a model deletes every projector of its folder.
+- An image dropped on a model whose vision is off offers to turn it on; the attach button is no longer off for models
+  without vision (it also adds documents, which every model reads).
+
 ## API for programs that send many related requests (24 Nov 2026)
 
 For live copilots, agents and document tools (docs/API.md › Many related requests; README › The API):

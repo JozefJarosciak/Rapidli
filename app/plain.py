@@ -381,6 +381,9 @@ def limits(eng):
 def read(fan, eng, base, text, images, name=None):
     """`text` (with image marks) read after the parked state `base` (-1: from nothing) into a new parked state.
     -> its session number"""
+    if images and not (eng.stats() or {}).get("vision"):
+        raise ApiError("the model was loaded without vision, so it cannot see images: load it with \"vision\": true "
+                       "(a model with vision_files in GET /api/v1/models)", 400)
     c = fan.clone()
     try:
         c.image_loader = lambda iid: images.get(iid)

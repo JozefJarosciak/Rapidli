@@ -698,6 +698,7 @@ input[type=range] { accent-color: var(--accent); width: 180px; }
 .mtbl .n, .mtbl th.n { text-align: right; font-family: var(--mono); white-space: nowrap; }
 .mtbl .mono { font-family: var(--mono); font-size: 12.5px; color: var(--soft); white-space: nowrap; }
 .mtbl td.c-src { white-space: nowrap; color: var(--soft); font-size: 12.5px; }
+.vissel { max-width: 190px; font: 600 10.5px/1 var(--mono); padding: 2px 4px; border-radius: 5px; border: 1px solid var(--line2); background: var(--raise); color: var(--read); }
 .mtbl .caps { display: flex; flex-wrap: wrap; gap: 4px; } .mtbl .caps .tag { margin-left: 0; }
 .mtbl .mfit { display: flex; align-items: center; gap: 6px; white-space: nowrap; } .mtbl .mfit .tag { margin-left: 0; } .mtbl .mfit .place { margin-left: 0; width: 70px; }
 .mtbl td.act, .mtbl th.act { text-align: right; white-space: nowrap; width: 1%; }
@@ -827,7 +828,7 @@ input[type=range] { accent-color: var(--accent); width: 180px; }
 }
 @media (max-width: 560px) {
   /* a phone: the composer's chips as icons (their names are in the titles), the model as its badge and a short name */
-  #searchbtn .lbl, #sizebtn .lbl, #thinkbtn .lbl { display: none; }
+  #searchbtn .lbl, #sizebtn .lbl, #thinkbtn .lbl, #visbtn .lbl { display: none; }
   .chip { padding: 6px 8px; }
   #modelbtn { max-width: 120px; min-width: 0; }
   .row { gap: 2px; }
@@ -885,6 +886,7 @@ input[type=range] { accent-color: var(--accent); width: 180px; }
           <button class="chip" id="searchbtn" aria-pressed="false" title="Look things up before answering: offline Wikipedia or the web"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.8 3.8 5.8 3.8 9s-1.2 6.2-3.8 9c-2.6-2.8-3.8-5.8-3.8-9S9.4 5.8 12 3Z"/></svg><span class="lbl">Search</span></button>
           <button class="chip" id="thinkbtn" aria-haspopup="menu" hidden title="How much the model thinks before it answers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3Z"/></svg><span class="lbl" id="thinklbl">Thinking off</span></button>
           <button class="chip" id="sizebtn" aria-haspopup="menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h6"/></svg><span class="lbl" id="sizelbl">Auto length</span></button>
+          <button class="chip" id="visbtn" aria-haspopup="menu" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/></svg><span class="lbl" id="vislbl">Vision</span></button>
           <div class="grow"></div>
           <button class="chip" id="modelbtn" aria-haspopup="menu" title="Choose the model"><span class="badge" id="modelbadge">?</span><span class="lbl" id="modellbl">loading…</span></button>
           <button class="send" id="send" aria-label="Send"><svg id="sendicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
@@ -1389,8 +1391,16 @@ async function status() {
     api("/api/chats/" + S.chat).then(c => { if (c.context) setGauge(c.context.used, c.context.limit, c.context); }).catch(() => {});
   }
   const canSee = s.status === "ready" && s.vision;
-  $("attbtn").disabled = !canSee;
-  $("attbtn").title = canSee ? "Add images (you can also paste or drop them)" : (s.can_see ? "This model sees images, but it was loaded without its vision projector (Settings › Engine › Vision)" : "This model cannot see images. Choose a model marked 'sees images'.");
+  // the Vision button: for a model with a projector (its place is kept while it loads)
+  $("visbtn").hidden = !s.can_see || !["ready", "loading"].includes(s.status);
+  $("visbtn").disabled = s.status !== "ready" || !!S.busy;
+  if (s.status === "ready") {
+    $("visbtn").classList.toggle("on", canSee);
+    $("vislbl").textContent = canSee ? "Vision" : "Vision off";
+    $("visbtn").title = canSee ? "The model sees images. Click to load it without vision (more lanes)" : "The model is loaded without vision. Click to load it with vision, so it sees images";
+  }
+  $("attbtn").disabled = s.status !== "ready";      // (documents are read by every model)
+  $("attbtn").title = "Add " + (canSee ? "images, " : "") + "PDFs, Word files or text files (you can also paste or drop them)" + (canSee ? "" : s.can_see ? ". Vision is off for this model: turn it on (the Vision button) to add images" : ". This model cannot see images");
   syncSend();
 }
 function syncSend() {
@@ -1574,6 +1584,26 @@ function lookNote(r) {
   return r ? `<div class="looknote${r.busy ? " busy" : r.bad ? " bad" : r.news ? " news" : ""}">${r.busy ? '<span class="spin"></span>' : ""}${esc(r.msg)}</div>` : "";
 }
 $("modelbtn").onclick = () => openModelMenu();
+// a model's vision: true, false, or one projector's file name. The model in use is loaded again with it.
+async function setVision(id, v) {
+  try {
+    const r = await api("/api/vision", { id, vision: v });
+    toast(r.reloading ? (v === false ? "Loading the model without vision" : "Loading the model with vision") : v === false ? "Vision is off for this model" : "Vision is on for this model");
+  } catch (e) { toast(e.message); }
+  status();
+}
+$("visbtn").onclick = async () => {
+  let j; try { j = await api("/api/models"); } catch (e) { return toast(e.message); }
+  const s = S.status || {}, m = j.models.find(x => x.current);
+  if (!m || !m.vision || s.status !== "ready") return;
+  const files = m.vision_files || [], now = (s.fit || {}).vision_file || m.vision_pick;
+  const items = [{ head: "Vision of " + m.label }].concat(files.length > 1
+    ? files.map(f => ({ key: f.file, label: "On: " + f.file, side: f.mb + " MB", on: s.vision && now === f.file }))
+    : [{ key: true, label: "On", side: files.length ? files[0].mb + " MB" : "", sub: "sees images; takes some lanes' memory", on: !!s.vision }]);
+  items.push({ key: false, label: "Off", sub: "text only; the memory goes to more lanes", on: !s.vision },
+             { head: "Changing it reloads the model (about half a minute). It is remembered for this model." });
+  openMenu($("visbtn"), items, it => { if (!it.on) setVision(m.id, it.key); });
+};
 async function openModelMenu(look) {
   // (only the menu asked for last opens: the "looking" one, slower to read its lists while downloads kept the disk
   // busy, opened after the result and spun on, 23 Nov)
@@ -1586,6 +1616,9 @@ async function openModelMenu(look) {
       sub: `${m.repo} · ${m.arch}${m.context ? " · reads " + fmtK(m.context) : ""}` + (short ? " · " + short : ""), on: m.current && S.status.status !== "idle",
       act: m.current && S.status && S.status.status === "ready" ? { label: "⏏ Eject", title: "Unload this model: frees the graphics card", run: eject } : null };
   }));
+  const cv = S.status && S.status.status === "ready" ? j.models.find(m => m.current && m.vision) : null;
+  if (cv) items.push({ sep: 1 }, { key: "__vision", label: "Vision", side: S.status.vision ? "on" : "off", on: !!S.status.vision, id: cv.id,
+    sub: S.status.vision ? "sees images; click to load it without (about 0.9 GB more for lanes)" : "click to load it with its vision projector, so it sees images (about 0.9 GB, a few lanes)" });
   items.push({ sep: 1 }, { key: "__refresh", label: "Look for new downloads" }, { key: "__unload", label: "Unload the model", sub: "frees the graphics card" }, { key: "__set", label: "Models and downloads…" });
   openMenu($("modelbtn"), items, async it => {
     if (it.key === "__refresh") {
@@ -1594,6 +1627,7 @@ async function openModelMenu(look) {
       const r = await lookForModels();
       return openModelMenu(r);
     }
+    if (it.key === "__vision") return setVision(it.id, !it.on);
     if (it.key === "__unload") return eject();
     if (it.key === "__set") return openSettings("models");
     if (it.on) {
@@ -3209,7 +3243,9 @@ async function addFiles(files) {
   if (docs.length) await addDocs(docs);
   const imgs = [...files].filter(f => f.type.startsWith("image/"));
   if (!imgs.length) return;
-  if (!(S.status && S.status.vision)) return toast("This model cannot see images. Choose a model marked 'sees images'.");
+  if (!(S.status && S.status.vision)) return S.status && S.status.can_see && S.status.model
+    ? toast("Vision is off for this model.", { label: "Turn it on", run: () => setVision(S.status.model.id, true) })
+    : toast("This model cannot see images. Choose a model marked 'sees images'.");
   for (const f of imgs.slice(0, 8 - S.atts.length)) {
     const a = { url: URL.createObjectURL(f), id: null }; S.atts.push(a); renderAtts();
     try { const data = await shrink(f); const j = await api("/api/upload", { data }); a.id = j.id; }
@@ -3709,7 +3745,7 @@ curl ${esc(base)}/v1/chat/completions${esc(auth)} \\
   -H "Content-Type: application/json" \\
   -d '{"context": "ctx-…", "stream": true, "max_tokens": 200, "priority": "high",
        "messages": [{"role": "user", "content": "Who signed it?"}]}'</pre></div>
-    <div class="field stack"><label>Also</label><div class="help"><code>GET /api/v1/status</code> the model, the lanes busy and free, the context limit, the places for contexts, vision, the chat format, the card's memory and a load's progress (<code>GET /api/v1/status/events</code>: the same whenever it changes) · <code>POST /api/v1/models/load</code> takes <code>lanes</code>, <code>context</code>, <code>margin_mb</code>, <code>vision</code> and <code>drafting</code> for one load · <code>GET /v1/models</code> the model loaded now, as OpenAI lists models.</div></div>`;
+    <div class="field stack"><label>Also</label><div class="help"><code>GET /api/v1/status</code> the model, the lanes busy and free, the context limit, the places for contexts, vision, the chat format, the card's memory and a load's progress (<code>GET /api/v1/status/events</code>: the same whenever it changes) · <code>POST /api/v1/models/load</code> takes <code>lanes</code>, <code>context</code>, <code>margin_mb</code>, <code>vision</code> (<code>true</code>, <code>false</code> or a file of the model's <code>vision_files</code>) and <code>drafting</code> for one load · <code>GET /v1/models</code> the model loaded now, as OpenAI lists models.</div></div>`;
   const toggle = (id, key2, after) => { const b = $(id); b.onclick = async () => { const v = b.getAttribute("aria-checked") !== "true"; b.setAttribute("aria-checked", String(v)); await saveSet("api", key2, v); if (after) after(); }; };
   toggle("a-on", "enabled", () => renderApi());
   toggle("a-key", "require_key", () => renderApi());
@@ -3811,7 +3847,7 @@ function renderTab() {
     const g = D.engine || {}, s = S.status || {};
     const fixed = typeof g.lanes === "number";
     body.innerHTML = head("Engine", "How a model is started on the graphics card. Changes apply the next time a model is loaded.") + `
-      <div class="field"><label>Vision</label><div class="help">Load the model's vision projector when it has one, so it can see images. It takes about 0.9 GB of the card, which is a few lanes.</div><div class="ctl">${sw("s-vis", g.vision !== false)}</div></div>
+      <div class="field"><label>Vision</label><div class="help">Load the model's vision projector when it has one, so it can see images. It takes about 0.9 GB of the card, which is a few lanes. For models with no choice of their own (the Vision button under the message box, or Settings › Models).</div><div class="ctl">${sw("s-vis", g.vision !== false)}</div></div>
       <div class="field"><label>Drafting</label><div class="help">Models with an MTP head (Qwen 3.6 and later) draft short answers a few tokens ahead; the full model checks them in one pass. About twice as fast for one-lane answers.</div><div class="ctl">${sw("s-draft", g.drafting !== false)}</div></div>
       <div class="field"><label>Lanes</label><div class="help">Lanes are answers written side by side in one pass. Automatic fits as many as the card holds and checks that none spill into the PC's memory.</div>
         <div class="ctl"><div class="seg" id="s-lanemode"><button data-v="auto" class="${fixed ? "" : "on"}">Automatic</button><button data-v="fixed" class="${fixed ? "on" : ""}">Fixed</button></div><input class="inp num" type="number" id="s-lanes" min="8" max="248" value="${fixed ? g.lanes : (s.lanes || 64)}" ${fixed ? "" : "hidden"}></div></div>
@@ -3977,7 +4013,12 @@ async function renderModels(look) {
   const total = j.models.reduce((a, m) => a + (m.gb || 0), 0);
 
   function caps(m) {
-    return (S.newModels && S.newModels.has(m.id) ? '<span class="tag new">new</span>' : "") + (m.vision ? '<span class="tag v">sees images</span>' : "")
+    // (vision is chosen per model: on, off, or which projector when there are several)
+    const vf = m.vision_files || [], cur = m.vision_on ? (vf.length > 1 ? m.vision_pick : "on") : "off";
+    const vis = !m.vision ? "" : `<select class="vissel" data-id="${esc(m.id)}" aria-label="Vision of ${esc(m.label)}" title="Load this model with its vision projector, so it sees images (about 0.9 GB of the card, a few lanes)">`
+      + (vf.length > 1 ? vf.map(x => `<option value="${esc(x.file)}"${cur === x.file ? " selected" : ""}>sees images: ${esc(x.file)} (${x.mb} MB)</option>`).join("") : `<option value="on"${cur === "on" ? " selected" : ""}>sees images</option>`)
+      + `<option value="off"${cur === "off" ? " selected" : ""}>vision off</option></select>`;
+    return (S.newModels && S.newModels.has(m.id) ? '<span class="tag new">new</span>' : "") + vis
       + (m.mtp ? '<span class="tag d">MTP drafting</span>' : "") + (m.experts > 0 ? `<span class="tag" title="${m.experts} experts">mixture of experts</span>` : "");
   }
   function fitCell(m) {
@@ -4046,6 +4087,7 @@ async function renderModels(look) {
       tbody.appendChild(tr);
     }
     w.innerHTML = ""; w.appendChild(tb);
+    tb.querySelectorAll(".vissel").forEach(x => x.onchange = async () => { await setVision(x.dataset.id, x.value === "on" ? true : x.value === "off" ? false : x.value); setTimeout(renderModels, 800); });
     tb.querySelectorAll("th.sort").forEach(th => {
       const go = () => { V.dir = V.sort === th.dataset.k ? -V.dir : 1; V.sort = th.dataset.k; save(); draw(); };
       th.onclick = go; th.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
