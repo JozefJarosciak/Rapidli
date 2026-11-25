@@ -9,6 +9,7 @@ faster, makes them better at the same speed, or makes the app simpler to use.
 - The offline Wikipedia is not in the repository: Rapidli offers to download it on its first start (1 GB).
 - Windows: `start.bat`. Linux: build the engine once with `engine/build-linux.sh`, then `./start.sh`.
 - The app is plain Python and one HTML page: there is no build step for it. Edit, restart, reload.
+- Have a Mac? Two short checks in the README's [macOS (help wanted)](README.md#macos-help-wanted) section would help.
 
 ## Where things are
 

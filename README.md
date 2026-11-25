@@ -264,11 +264,37 @@ Under WSL 2, keep the models on the Linux disk: a model on a Windows drive (`/mn
 
 ### macOS (help wanted)
 
-Rapidli does not run on a Mac yet. The app (Python and the page) is portable, but the engine's speed comes from its
-own CUDA kernels and patches, and Macs have no NVIDIA cards. A port would mean building the engine on llama.cpp's
-**Metal** backend, without the CUDA-only patches at first, then measuring how many lanes Apple silicon's unified memory
-holds. If you'd like to try, open an issue: [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) explains what the engine relies on,
-and [docs/BUILDING.md](docs/BUILDING.md) lists every patch and what it changes.
+Rapidli does not run on a Mac yet, and we have no Mac to try it on. **If you have a Mac with Apple silicon (M1 or
+newer), 20 minutes of your time would help a lot.** No coding needed, just two commands:
+
+**1. Do the app's tests pass?** (about 5 minutes)
+
+```sh
+git clone https://github.com/JozefJarosciak/Rapidli && cd Rapidli
+sh tests/run_offline.sh        # needs Python 3.10 or newer (brew install python)
+```
+
+**2. How fast is your Mac when it writes many things at once?** (about 15 minutes)
+Rapidli is fast because it writes many parts of an answer at the same time. This measures how well a Mac does that,
+with plain llama.cpp:
+
+```sh
+brew install llama.cpp
+llama-batched-bench -m /path/to/model.gguf -c 32768 -npp 256 -ntg 128 -npl 1,8,32,64
+```
+
+Any GGUF model you have will do (a 4-bit 8B model is a good start).
+
+**Then [open a Mac report](https://github.com/JozefJarosciak/Rapidli/issues/new?template=mac_report.md)** and paste
+what both commands printed, with your Mac's chip and memory. That's all: it tells us whether a Mac version is worth
+building, and how many lanes it could run.
+
+*Why there is no Mac version yet:* the app (Python and the page) is portable, but the engine's speed comes from its
+own CUDA kernels and patches, and Macs have no NVIDIA cards. A port means building the engine on llama.cpp's **Metal**
+backend, without the CUDA-only patches at first. Macs do have one big plus: up to 512 GB of memory shared with the
+graphics chip, enough for models far larger than any graphics card holds. If you'd like to try the port itself,
+[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) explains what the engine relies on, and
+[docs/BUILDING.md](docs/BUILDING.md) lists every patch and what it changes.
 
 ## First start
 
