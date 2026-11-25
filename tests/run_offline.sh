@@ -11,12 +11,14 @@ fi
 [ -n "$PY" ] || { echo "Python 3.10 or newer was not found (set PYTHON=...)"; exit 1; }
 failed=0
 for t in test_rich_points test_together test_stuck test_sizing_notes test_hub_split test_fetch test_kiwix_names test_revise test_plain_api; do
-    out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONIOENCODING=utf8 "$PY" "tests/$t.py" 2>&1)
+    out=$(PYTHONDONTWRITEBYTECODE=1 PYTHONIOENCODING=utf8 "$PY" "tests/$t.py" 2>&1); code=$?
     last=$(printf '%s\n' "$out" | tail -n 1)
     case "$last" in
-        "ALL PASS"|PASS*) echo "ok    $t" ;;
-        *) echo "FAIL  $t: $last"; printf '%s\n' "$out" | grep -E '^FAIL' | head -n 5; failed=$((failed + 1)) ;;
+        "ALL PASS"|PASS*) [ "$code" -eq 0 ] && { echo "ok    $t"; continue; } ;;
     esac
+    echo "FAIL  $t: $last"
+    printf '%s\n' "$out" | grep -E '^FAIL' | head -n 5
+    failed=$((failed + 1))
 done
 echo "$failed test file(s) failed"
 exit "$failed"

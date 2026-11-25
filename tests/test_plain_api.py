@@ -427,5 +427,5 @@ check("... and stop_all ends it", cancel.is_set())
 R.GATE.plain_exit(cancel)
 check("... and the engine is free again after it", not R.GATE.locked())
 
-print(f"{len(FAILED)} failed" if FAILED else "all passed")
+print("ALL PASS" if not FAILED else f"{len(FAILED)} FAILED: " + "; ".join(FAILED))
 sys.exit(1 if FAILED else 0)
