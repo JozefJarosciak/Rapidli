@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.2: the version 5 engine in the downloads (26 Nov 2026)
+
+- The engine downloads are the version 5 engine (`rapidli-engine`, `llama` and `ggml-cuda` rebuilt; the rest as in
+  0.9.1): plain mode, contexts, priority, batches and top_p need it, and an engine from 0.9.1 answers plain requests
+  with `501`. Same llama.cpp base (b12631), same cards (Windows RTX 20-50, Linux RTX 20-40), CUDA libraries included
+  as before, so still only the driver to install.
+- Everything below since 0.9.1: the API for programs that send many related requests, vision chosen per model, the
+  refit fix, the tests on GitHub Actions and the macOS help-wanted section in the README.
+
 ## Vision chosen per model (25 Nov 2026)
 
 - **A model's vision is chosen for that model**: with the **Vision** button under the message box (shown for a model
